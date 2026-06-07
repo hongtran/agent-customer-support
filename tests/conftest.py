@@ -1,0 +1,10 @@
+# tests/conftest.py
+import os
+os.environ.setdefault("RAG_BASE_URL", "http://localhost:7799")
+os.environ.setdefault("PRODUCT_COLLECTION", "cenlab")
+os.environ.setdefault("AGENT_MODEL", "gpt-4o-mini")
+os.environ.setdefault("DYNAMODB_ENDPOINT_URL", "http://localhost:8000")
+os.environ.setdefault("AWS_ACCESS_KEY_ID", "local")
+os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "local")
+os.environ.setdefault("AWS_REGION", "ap-southeast-1")
+os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
