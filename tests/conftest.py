@@ -8,6 +8,13 @@ os.environ.setdefault("AWS_ACCESS_KEY_ID", "local")
 os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "local")
 os.environ.setdefault("AWS_REGION", "ap-southeast-1")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
+# enterprise_llm_service import-time env stubs (global_config reads these at class definition)
+os.environ.setdefault("QDRANT_ENDPOINT", "http://localhost:6333")
+os.environ.setdefault("QDRANT_API_KEY", "local")
+os.environ.setdefault("CELERY_BROKER_URL", "redis://localhost:6379/1")
+os.environ.setdefault("CELERY_RESULT_BACKEND", "redis://localhost:6379/2")
+os.environ.setdefault("OPENAI_API_KEY", "sk-fake-for-tests")
+os.environ.setdefault("TOGETHERAI_API_KEY", "fake-togetherai-for-tests")
 
 # respx 0.21 + httpx 0.28 / httpcore 1.x compatibility fix:
 # httpcore 1.x passes method as bytes; respx's HTTPCoreMocker.to_httpx_request
