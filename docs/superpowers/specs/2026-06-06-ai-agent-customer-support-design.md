@@ -40,7 +40,11 @@ Phân tích file `1. Cac yeu cau TTP-Cenlab 2026.xlsx` (danh sách yêu cầu th
 | **"Hướng dẫn sử dụng"** | "Tên mẫu nhập thế nào?", "copy đơn hàng", "phân quyền PKD đi lấy mẫu", "chọn ngày quá khứ" | ✅ RAG + flow |
 | **"Nâng cấp"** (feature request) | "bổ sung cột địa điểm lấy mẫu", "thêm biên bản lấy mẫu QT", "đổi quy tắc mã mẫu" | ❌ cần dev — chỉ triage/định tuyến |
 
-**Hệ quả thiết kế:** agent cần bước **triage** đầu vào. "How-to" → trả lời/dẫn flow. "Nâng cấp/bug" → **không bịa giải pháp**, mà ghi nhận + chuyển CS/product (đúng quy trình "Phân loại" Tâm Đức đang làm thủ công). **Kỳ vọng thực tế:** agent không giải quyết ~nửa số yêu cầu (feature request); giá trị = deflect nửa "how-to" + tự động triage phần còn lại.
+**Hệ quả thiết kế — triage theo kiểu "try-then-route" (KHÔNG phải classifier trả trước):** PoC cho thấy phân loại how-to/feature trả trước chỉ đạt ~60% so với người (§13), vì ranh giới phụ thuộc việc *biết phần mềm làm được gì* — kiến thức có được nhờ **search**, không phải đoán mù. Vì vậy agent **thử giải quyết trước** (`search_knowledge` + `get_flow`); chỉ khi *không tìm được đáp án có căn cứ* mới đề xuất `log_request` (feature/bug) + escalate. Không bịa quy trình không tồn tại.
+
+**Kỳ vọng thực tế:** agent không giải quyết ~nửa số yêu cầu (feature request thật); giá trị = deflect nhóm "how-to" có tài liệu + tự động định tuyến phần còn lại.
+
+**Knowledge gap (bắt buộc xử lý):** PoC chứng minh ~nửa đáp án how-to thật ("có sẵn", workaround, "tên mẫu = tên nền mẫu") **không nằm trong HDSD** mà ở ticket cũ / đầu CS. → Ingest **chỉ HDSD là chưa đủ**; phải nạp thêm **ticket đã giải quyết + chính file Excel (cột giải pháp) + tri thức tribal** vào RAG. Đây là điều kiện cần để đạt deflection rate cao.
 
 ---
 
@@ -112,7 +116,7 @@ AgentCore.handle_turn(session, user_msg):
   5. Trả message chuẩn hoá về Channel Adapter
 ```
 
-**Triage (§2.1):** system prompt hướng dẫn agent phân loại mỗi yêu cầu. Việc "how-to" → `search_knowledge`/`get_flow`. Yêu cầu **nâng cấp/bug** (vượt khả năng phần mềm hiện tại) → gọi `log_request` để ghi nhận + báo CS, **không** bịa quy trình không tồn tại.
+**Triage = "try-then-route" (§2.1):** agent KHÔNG phân loại trả trước. Nó luôn **thử `search_knowledge`/`get_flow` trước**; nếu có đáp án căn cứ → trả lời/dẫn flow. Nếu *không tìm được* (vượt khả năng phần mềm) → gọi `log_request` (feature/bug) + báo CS, **không** bịa quy trình không tồn tại.
 
 ### Năm tool
 
@@ -242,13 +246,13 @@ outcomes:
 ## 12. Phạm vi Spec 1 (chốt) & Ngoài phạm vi
 
 **Trong Spec 1:**
-- Agent Core (loop tự viết + 5 tool), system prompt + prompt caching, **triage how-to vs feature/bug**, soft module-scoping.
+- Agent Core (loop tự viết + 5 tool), system prompt + prompt caching, **triage "try-then-route"** (§2.1), soft module-scoping.
 - Flow Store (DynamoDB) + Import/CRUD API + flow engine (guardrail).
 - Customer Registry + Request backlog (cho `log_request`).
 - Channel: Web widget (REST/WebSocket).
 - Session Store + Conversation Store.
 - Escalation → nhóm Zalo CS.
-- **Ingest HDSD Cenlab qua pipeline FILE_PARSING sẵn có** (Gemini→markdown) vào RAG collection để có tri thức Q&A.
+- **Ingest tri thức qua pipeline FILE_PARSING sẵn có** (Gemini→markdown): HDSD Cenlab **+ ticket cũ + file Excel giải pháp** (bắt buộc — §13 cho thấy ~nửa đáp án how-to không nằm trong HDSD).
 - Observability cơ bản + eval set khởi điểm (từ file Excel yêu cầu thật).
 - Task tiền đề ở `enterprise-llm-service` (mục §11).
 
@@ -268,4 +272,14 @@ outcomes:
 1. **Ingest (PDF ảnh → markdown):** trích 5 trang (19–23) → upload Gemini → `PROMPT_TO_CONVERT_DOC_TO_MARKDOWN` → markdown tiếng Việt **sạch, giữ nguyên** heading đánh số (`3.3`, `3.4 PYC sự cố`, `4. NHẬN MẪU`...), chuỗi **"Bước 1/2/3"**, đường dẫn menu và tên trường đọc từ screenshot. → xác nhận ingest không cần OCR mới.
 2. **doc→flow (markdown → playbook):** đưa markdown qua prompt trích flow → ra **JSON playbook hợp lệ đúng schema §6** cho quy trình "PYC sự cố" (id/title/module/triggers/steps/next/outcomes). → xác nhận doc→flow khả thi và rẻ vì tái dùng output ingest.
 
-**Kết luận:** rủi ro kỹ thuật của ingest + doc→flow ở mức thấp; thành phần khó còn lại là chất lượng agent loop + triage, sẽ đo bằng eval set §10.
+### PoC sâu — ingest toàn bộ + đo trên yêu cầu thật
+
+3. **Ingest toàn bộ 76 trang** → KB markdown ~56k ký tự (~14k token). 10 chunk Gemini, chạy gọn.
+4. **Triage (so với cột "Phân loại" của Tâm Đức, 22 yêu cầu):** classifier trả trước đạt **64% zero-shot**, **59% khi có KB** — KB không cứu được. Các ca sai chủ yếu là yêu cầu *nghe như feature* nhưng thực ra tính năng "có sẵn"/có workaround mà HDSD không ghi. → đổi sang **try-then-route** (§2.1, §5).
+5. **Q&A (KB làm context):** quy trình có trong HDSD (PYC sự cố, hủy PYCTN, sửa kết quả) → trả lời **đúng, có bước cụ thể**; câu không có trong HDSD ("tên mẫu nhập sao") → agent **tự nói "chưa có trong tài liệu, chuyển nhân viên"**, KHÔNG hallucination.
+
+**Kết luận:**
+- Rủi ro ingest + doc→flow + Q&A-grounded: **thấp** (đã chứng minh).
+- Nút thắt thật = **độ phủ tri thức**: phải ingest ticket cũ + Excel giải pháp + tribal, không chỉ HDSD.
+- Triage không nên là classifier trả trước → **try-then-route**.
+- Chất lượng agent loop cuối cùng đo bằng eval set §10.
