@@ -1,3 +1,5 @@
+.PHONY: build run test lint infra-up infra-down
+
 build:
 	poetry install
 run:

@@ -2,7 +2,7 @@
 name = "agent-customer-support"
 version = "0.1.0"
 description = "Cloud advisory AI agent for CenLab customer support"
-authors = ["Tam Duc"]
+authors = ["Tam Duc <dev@tamducjsc.info>"]
 packages = [{ include = "agent_customer_support" }]
 
 [tool.poetry.dependencies]
