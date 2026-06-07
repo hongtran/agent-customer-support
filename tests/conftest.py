@@ -8,3 +8,36 @@ os.environ.setdefault("AWS_ACCESS_KEY_ID", "local")
 os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "local")
 os.environ.setdefault("AWS_REGION", "ap-southeast-1")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
+
+# respx 0.21 + httpx 0.28 / httpcore 1.x compatibility fix:
+# httpcore 1.x passes method as bytes; respx's HTTPCoreMocker.to_httpx_request
+# forwards the raw bytes into httpx.Request, which keeps method as bytes.
+# respx then compares bytes b'POST' against string 'POST' — no match.
+# Fix: decode bytes method before constructing the httpx.Request.
+import httpx as _httpx
+from respx.mocks import HTTPCoreMocker as _HTTPCoreMocker
+
+
+@classmethod  # type: ignore[misc]
+def _patched_to_httpx_request(cls, **kwargs):
+    request = kwargs["request"]
+    method = request.method
+    if isinstance(method, bytes):
+        method = method.decode()
+    raw_url = (
+        request.url.scheme,
+        request.url.host,
+        request.url.port,
+        request.url.target,
+    )
+    from respx.patterns import parse_url
+    return _httpx.Request(
+        method,
+        parse_url(raw_url),
+        headers=request.headers,
+        stream=request.stream,
+        extensions=request.extensions,
+    )
+
+
+_HTTPCoreMocker.to_httpx_request = _patched_to_httpx_request
