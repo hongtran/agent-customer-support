@@ -20,6 +20,7 @@ google-genai = "^2.8.0"
 openai = "^2.41.0"
 environs = "^15.0.1"
 tenacity = "^9.1.4"
+openpyxl = "^3.1.5"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3"
