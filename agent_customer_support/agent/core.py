@@ -1,7 +1,7 @@
+import json
 import re
-from agent_customer_support.config import get_settings
 from agent_customer_support.llm import complete_with_tools
-from agent_customer_support.models import ChatResponse, CustomerProfile, SessionState, Turn
+from agent_customer_support.models import ChatResponse, CustomerProfile, Turn
 from agent_customer_support.rag_client import RagClient
 from agent_customer_support.escalation import Escalator
 from agent_customer_support.flows.engine import FlowEngine
@@ -63,14 +63,14 @@ class AgentCore:
             if out["stop_reason"] != "tool_use":
                 final_text = out.get("text") or ""
                 break
-            messages.append({"role": "assistant", "content": out.get("text") or "", "_raw": out["raw"]})
+            messages.append({"role": "assistant", "content": out.get("text") or ""})
             tool_results = []
             for call in out["tool_calls"]:
                 result = await dispatch(call["name"], call["input"], ctx)
                 if call["name"] == "escalate_to_human":
                     escalated = True
                 tool_results.append(
-                    {"type": "tool_result", "tool_use_id": call["id"], "content": str(result)}
+                    {"type": "tool_result", "tool_use_id": call["id"], "content": json.dumps(result, ensure_ascii=False)}
                 )
             messages.append({"role": "user", "content": tool_results})
 
