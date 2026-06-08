@@ -1,5 +1,6 @@
 # tests/conftest.py
 import os
+
 os.environ.setdefault("RAG_BASE_URL", "http://localhost:7799")
 os.environ.setdefault("PRODUCT_COLLECTION", "cenlab")
 os.environ.setdefault("AGENT_MODEL", "gpt-4o-mini")
@@ -38,6 +39,7 @@ def _patched_to_httpx_request(cls, **kwargs):
         request.url.target,
     )
     from respx.patterns import parse_url
+
     return _httpx.Request(
         method,
         parse_url(raw_url),

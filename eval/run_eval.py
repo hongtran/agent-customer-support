@@ -1,4 +1,6 @@
-import asyncio, json, sys
+import asyncio
+import json
+import sys
 from agent_customer_support.agent.core import AgentCore
 
 
@@ -14,7 +16,7 @@ async def main(golden_path: str, customer_id: str = "ttp") -> None:
         correct_class += int(pred == it["expected_class"])
         deflected += int(pred == "how_to" and not reply.escalated)
     n = len(items)
-    print(f"triage accuracy: {correct_class}/{n} = {correct_class/n*100:.0f}%")
+    print(f"triage accuracy: {correct_class}/{n} = {correct_class / n * 100:.0f}%")
     print(f"deflected (tự trả lời): {deflected}/{n}")
 
 

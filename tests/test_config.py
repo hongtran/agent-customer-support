@@ -1,5 +1,6 @@
 from agent_customer_support.config import get_settings
 
+
 def test_settings_load_from_env(monkeypatch):
     monkeypatch.setenv("PRODUCT_COLLECTION", "cenlab")
     monkeypatch.setenv("AGENT_MODEL", "gpt-4o-mini")

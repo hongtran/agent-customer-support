@@ -3,8 +3,10 @@ import aioboto3
 from botocore.exceptions import ClientError
 from agent_customer_support.config import get_settings
 
+
 def _session() -> aioboto3.Session:
     return aioboto3.Session()
+
 
 @contextlib.asynccontextmanager
 async def get_resource():
@@ -15,6 +17,7 @@ async def get_resource():
         region_name=s.aws_region,
     ) as ddb:
         yield ddb
+
 
 async def ensure_table(name: str, key: str = "id") -> None:
     async with get_resource() as ddb:

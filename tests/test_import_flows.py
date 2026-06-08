@@ -1,5 +1,7 @@
-import json, pathlib
+import json
+import pathlib
 from agent_customer_support.models import Flow
+
 
 def test_seed_flow_valid():
     p = pathlib.Path("seeds/flows/pyc_su_co.json")

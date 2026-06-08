@@ -4,14 +4,22 @@ from agent_customer_support.flows.engine import FlowEngine
 
 def _flow():
     return Flow(
-        id="f1", title="t", module="m", triggers=["x"],
+        id="f1",
+        title="t",
+        module="m",
+        triggers=["x"],
         steps=[
-            FlowStep(id="s1", say="A", next=[FlowTransition(when="ok", goto="s2"),
-                                             FlowTransition(when="loi", goto="esc")]),
+            FlowStep(
+                id="s1",
+                say="A",
+                next=[FlowTransition(when="ok", goto="s2"), FlowTransition(when="loi", goto="esc")],
+            ),
             FlowStep(id="s2", say="B", next=[FlowTransition(when="xong", goto="done")]),
         ],
-        outcomes={"done": FlowOutcome(type="success", say="bye"),
-                  "esc": FlowOutcome(type="escalate", reason="khong xu ly duoc")},
+        outcomes={
+            "done": FlowOutcome(type="success", say="bye"),
+            "esc": FlowOutcome(type="escalate", reason="khong xu ly duoc"),
+        },
     )
 
 

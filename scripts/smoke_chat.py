@@ -5,10 +5,13 @@ from agent_customer_support.agent.core import AgentCore
 
 
 async def main() -> None:
-    reg = CustomerRegistry(); await reg.init()
-    await reg.put(CustomerProfile(
-        customer_id="ttp", name="TTP", enabled_modules=["yeu-cau-thu-nghiem", "xet-nghiem"]
-    ))
+    reg = CustomerRegistry()
+    await reg.init()
+    await reg.put(
+        CustomerProfile(
+            customer_id="ttp", name="TTP", enabled_modules=["yeu-cau-thu-nghiem", "xet-nghiem"]
+        )
+    )
     agent = AgentCore()
     for msg in ["Làm sao xử lý PYC sự cố?", "tôi không thấy phiếu nào cả"]:
         reply = await agent.handle_turn(customer_id="ttp", conversation_id="smoke1", user_msg=msg)

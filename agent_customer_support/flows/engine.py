@@ -4,7 +4,7 @@ from agent_customer_support.models import Flow, FlowStep, FlowOutcome
 
 @dataclass
 class Resolved:
-    kind: str                      # "step" | "outcome"
+    kind: str  # "step" | "outcome"
     step: FlowStep | None = None
     outcome: FlowOutcome | None = None
 

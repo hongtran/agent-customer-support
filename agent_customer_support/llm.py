@@ -3,7 +3,9 @@ from enterprise_llm_service.llm_inference.llm_inference_base import ai_completio
 from agent_customer_support.config import get_settings
 
 
-def complete_with_tools(*, messages: list[dict], tools: list[dict], system: str | None = None) -> dict:
+def complete_with_tools(
+    *, messages: list[dict], tools: list[dict], system: str | None = None
+) -> dict:
     return ai_completion_with_tools(
         model=get_settings().agent_model,
         messages=messages,

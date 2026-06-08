@@ -9,6 +9,7 @@ def _now() -> datetime:
 
 # ---- Flow ----
 
+
 class FlowTransition(BaseModel):
     when: str
     goto: str
@@ -40,6 +41,7 @@ class Flow(BaseModel):
 
 # ---- Customer ----
 
+
 class CustomerProfile(BaseModel):
     customer_id: str
     name: str
@@ -48,6 +50,7 @@ class CustomerProfile(BaseModel):
 
 
 # ---- Conversation ----
+
 
 class Turn(BaseModel):
     role: Literal["user", "assistant"]
@@ -64,6 +67,7 @@ class Conversation(BaseModel):
 
 # ---- Request backlog ----
 
+
 class RequestRecord(BaseModel):
     id: str
     customer_id: str
@@ -76,6 +80,7 @@ class RequestRecord(BaseModel):
 
 # ---- Session ----
 
+
 class SessionState(BaseModel):
     conversation_id: str
     active_flow_id: str | None = None
@@ -84,6 +89,7 @@ class SessionState(BaseModel):
 
 
 # ---- Channel I/O ----
+
 
 class ChatRequest(BaseModel):
     customer_id: str

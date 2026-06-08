@@ -13,8 +13,11 @@ NGUYÊN TẮC "try-then-route":
 Chỉ tư vấn/hướng dẫn; bạn KHÔNG thao tác hộ trên hệ thống của khách.
 """
 
+
 def build_system_prompt(
-    customer: CustomerProfile, session: SessionState, active_flow: Flow | None,
+    customer: CustomerProfile,
+    session: SessionState,
+    active_flow: Flow | None,
 ) -> str:
     parts = [_BASE]
     if customer.enabled_modules:

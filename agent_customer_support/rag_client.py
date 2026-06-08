@@ -26,10 +26,13 @@ class RagClient:
         docs = data.get("documents", []) or []
         metas = data.get("metadatas", []) or []
         confs = [m.get("confidence", 0.0) for m in metas]
-        citations = sorted({
-            m.get("source_doc_id") or m.get("doc_id", "")
-            for m in metas if (m.get("source_doc_id") or m.get("doc_id"))
-        })
+        citations = sorted(
+            {
+                m.get("source_doc_id") or m.get("doc_id", "")
+                for m in metas
+                if (m.get("source_doc_id") or m.get("doc_id"))
+            }
+        )
         return {
             "passages": docs,
             "citations": citations,

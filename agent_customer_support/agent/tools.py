@@ -1,4 +1,6 @@
 from dataclasses import dataclass
+from typing import Any
+
 from agent_customer_support.config import get_settings
 from agent_customer_support.models import CustomerProfile
 
@@ -54,10 +56,10 @@ TOOL_DEFS: list[dict] = [
 @dataclass
 class ToolContext:
     customer: CustomerProfile
-    rag: object
-    flow_store: object
-    backlog: object
-    escalator: object
+    rag: Any
+    flow_store: Any
+    backlog: Any
+    escalator: Any
     conversation_id: str
     transcript: str = ""
 
