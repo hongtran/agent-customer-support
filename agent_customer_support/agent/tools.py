@@ -62,6 +62,7 @@ class ToolContext:
     escalator: Any
     conversation_id: str
     transcript: str = ""
+    last_fetched_flow: Any = None   # set by get_flow → enables flow activation in core
 
 
 async def dispatch(name: str, args: dict, ctx: ToolContext) -> dict:
@@ -76,6 +77,8 @@ async def dispatch(name: str, args: dict, ctx: ToolContext) -> dict:
         flow = await ctx.flow_store.get(args["flow_id"])
         if not flow:
             return {"error": "flow_not_found"}
+        # Track so core.py can activate this flow when agent emits [[goto:step_id]]
+        ctx.last_fetched_flow = flow
         return {"flow": flow.model_dump(mode="json")}
 
     if name == "log_request":

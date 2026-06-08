@@ -84,6 +84,7 @@ class AgentCore:
             f"user_msg: {user_msg!r}  |  "
             f"modules={customer.enabled_modules}  |  "
             f"active_flow={session.active_flow_id}  step={session.current_step_id}",
+            # f"system_message={system}"
         )
 
         messages: list[dict] = [{"role": "user", "content": user_msg}]
@@ -92,7 +93,7 @@ class AgentCore:
 
         for round_n in range(MAX_TOOL_ROUNDS):
             # ── DEBUG: LLM call ─────────────────────────────────────────────
-            _dbg(f"LLM CALL  round={round_n + 1}/{MAX_TOOL_ROUNDS}  model={get_settings().agent_model}")
+            _dbg(f"LLM CALL  round={round_n + 1}/{MAX_TOOL_ROUNDS}  model={get_settings().agent_model} messages={messages}")
 
             out = complete_with_tools(messages=messages, tools=TOOL_DEFS, system=system)
 
@@ -172,11 +173,19 @@ class AgentCore:
 
         # ── DEBUG: flow marker ──────────────────────────────────────────────
         clean_text, goto = parse_goto(final_text)
-        if goto:
-            _dbg(f"FLOW MARKER  [[goto:{goto}]]  active_flow={active_flow and active_flow.id}")
 
-        if active_flow and goto:
-            res = FlowEngine.resolve(active_flow, goto)
+        # Resolve which flow to use: session-active OR just fetched via get_flow tool
+        effective_flow = active_flow or ctx.last_fetched_flow
+
+        if goto:
+            _dbg(
+                f"FLOW MARKER  [[goto:{goto}]]",
+                f"active_flow={active_flow and active_flow.id}  "
+                f"effective={effective_flow and effective_flow.id}",
+            )
+
+        if effective_flow and goto:
+            res = FlowEngine.resolve(effective_flow, goto)
             if res.kind == "outcome":
                 if res.outcome is not None and res.outcome.type == "escalate":
                     await self.escalator.escalate(
@@ -190,6 +199,11 @@ class AgentCore:
                 session.current_step_id = None
             else:
                 if res.step is not None:
+                    # Activate flow in session (covers both: advancing existing flow
+                    # AND starting a new flow that agent just fetched via get_flow)
+                    if not session.active_flow_id:
+                        session.active_flow_id = effective_flow.id
+                        _dbg(f"FLOW ACTIVATED  flow={effective_flow.id}  first_step={res.step.id}")
                     _dbg(f"FLOW ADVANCE  → step={res.step.id}")
                     session.current_step_id = res.step.id
             await self.sessions.save(session)

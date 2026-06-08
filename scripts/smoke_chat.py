@@ -37,11 +37,37 @@ from agent_customer_support.models import CustomerProfile              # noqa: E
 from agent_customer_support.stores.customer_registry import CustomerRegistry  # noqa: E402
 from agent_customer_support.agent.core import AgentCore                # noqa: E402
 
-# ── Demo questions ─────────────────────────────────────────────────────────
-DEMO_QUESTIONS = [
-    "Làm sao xử lý PYC sự cố?",
-    "tôi không thấy phiếu nào cả",
-]
+# ── Demo question sets ─────────────────────────────────────────────────────
+# Chạy mặc định: cả 3 path
+DEMO_CASES = {
+    "qa": {
+        "desc": "PATH A — Q&A (search_knowledge only)",
+        "conv": "smoke-qa",
+        "msgs": [
+            "Tên mẫu khi tạo đơn hàng thì nhập như thế nào?",
+            "Địa điểm lấy mẫu không có thì điền gì?",
+        ],
+    },
+    "flow": {
+        "desc": "PATH B — Flow guidance (list_flows → get_flow → dẫn từng bước)",
+        "conv": "smoke-flow",
+        "msgs": [
+            # Turn 1: trigger get_flow — yêu cầu hướng dẫn từng bước rõ ràng
+            "Hướng dẫn tôi từng bước xử lý PYC sự cố, tôi chưa biết bắt đầu từ đâu",
+            # Turn 2: theo flow — agent đang ở step 'tiep_nhan', user xác nhận
+            "tôi đã vào menu và thấy phiếu rồi",
+            # Turn 3: theo flow — agent ở step 'phe_duyet', user gặp lỗi
+            "tôi nhấn phê duyệt nhưng bị lỗi",
+        ],
+    },
+    "feature": {
+        "desc": "PATH C — Feature request (log_request)",
+        "conv": "smoke-feat",
+        "msgs": [
+            "Tôi muốn thêm cột địa điểm lấy mẫu vào màn hình danh sách đơn hàng",
+        ],
+    },
+}
 
 SEP  = "─" * 60
 SEP2 = "═" * 60
@@ -100,8 +126,22 @@ async def main() -> None:
             pass
         print("\nBye!")
     else:
-        for msg in DEMO_QUESTIONS:
-            await chat(agent, "ttp", conv_id, msg)
+        # Chọn case muốn chạy qua arg: --qa / --flow / --feature / (mặc định: cả 3)
+        case_filter = None
+        for k in DEMO_CASES:
+            if f"--{k}" in sys.argv:
+                case_filter = k
+                break
+
+        cases_to_run = {case_filter: DEMO_CASES[case_filter]} if case_filter else DEMO_CASES
+
+        for case_key, case in cases_to_run.items():
+            print(f"\n\033[1;33m{'─'*60}")
+            print(f"  {case['desc']}")
+            print(f"{'─'*60}\033[0m")
+            for msg in case["msgs"]:
+                await chat(agent, "ttp", case["conv"], msg)
+
         print(f"\n\033[1m{SEP2}\033[0m")
 
 
