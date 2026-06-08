@@ -1,5 +1,6 @@
 import json
 import re
+from agent_customer_support.config import get_settings
 from agent_customer_support.llm import complete_with_tools
 from agent_customer_support.models import ChatResponse, CustomerProfile, Turn
 from agent_customer_support.rag_client import RagClient
@@ -68,20 +69,48 @@ class AgentCore:
             if out["stop_reason"] != "tool_use":
                 final_text = out.get("text") or ""
                 break
-            messages.append({"role": "assistant", "content": out.get("text") or ""})
-            tool_results = []
+            # Build provider-appropriate assistant message
+            model = get_settings().agent_model
+            is_anthropic = "claude" in model
+            if is_anthropic:
+                messages.append({"role": "assistant", "content": out.get("text") or ""})
+            else:
+                # OpenAI: assistant message must include tool_calls list
+                messages.append({
+                    "role": "assistant",
+                    "content": out.get("text"),
+                    "tool_calls": [
+                        {
+                            "id": c["id"],
+                            "type": "function",
+                            "function": {"name": c["name"], "arguments": json.dumps(c["input"], ensure_ascii=False)},
+                        }
+                        for c in out["tool_calls"]
+                    ],
+                })
+
+            tool_results_anthropic = []
             for call in out["tool_calls"]:
                 result = await dispatch(call["name"], call["input"], ctx)
                 if call["name"] == "escalate_to_human":
                     escalated = True
-                tool_results.append(
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": call["id"],
+                if is_anthropic:
+                    tool_results_anthropic.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": call["id"],
+                            "content": json.dumps(result, ensure_ascii=False),
+                        }
+                    )
+                else:
+                    # OpenAI: each tool result is a separate "tool" role message
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": call["id"],
                         "content": json.dumps(result, ensure_ascii=False),
-                    }
-                )
-            messages.append({"role": "user", "content": tool_results})
+                    })
+            if is_anthropic:
+                messages.append({"role": "user", "content": tool_results_anthropic})
 
         clean_text, goto = parse_goto(final_text)
         if active_flow and goto:
