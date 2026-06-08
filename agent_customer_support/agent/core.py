@@ -1,5 +1,7 @@
 import json
+import logging
 import re
+import textwrap
 from agent_customer_support.config import get_settings
 from agent_customer_support.llm import complete_with_tools
 from agent_customer_support.models import ChatResponse, CustomerProfile, Turn
@@ -14,8 +16,23 @@ from agent_customer_support.stores.session_store import SessionStore
 from agent_customer_support.agent.prompt import build_system_prompt
 from agent_customer_support.agent.tools import TOOL_DEFS, ToolContext, dispatch
 
+logger = logging.getLogger(__name__)
 _GOTO_RE = re.compile(r"\[\[goto:([a-zA-Z0-9_\-]+)\]\]")
 MAX_TOOL_ROUNDS = 6
+
+
+def _dbg(label: str, data: str = "", width: int = 72) -> None:
+    """Print a compact debug block — only active when logger is DEBUG."""
+    if not logger.isEnabledFor(logging.DEBUG):
+        return
+    border = "─" * width
+    print(f"\n\033[36m┌{border}┐\033[0m")
+    print(f"\033[36m│ {label:<{width-1}}\033[0m\033[36m│\033[0m")
+    if data:
+        print(f"\033[36m├{border}┤\033[0m")
+        for line in textwrap.wrap(data, width - 2) or [data]:
+            print(f"\033[36m│ {line:<{width-1}}│\033[0m")
+    print(f"\033[36m└{border}┘\033[0m")
 
 
 def parse_goto(text: str) -> tuple[str, str | None]:
@@ -61,14 +78,39 @@ class AgentCore:
             transcript=transcript + f"\nuser: {user_msg}",
         )
 
+        # ── DEBUG: context ──────────────────────────────────────────────────
+        _dbg(
+            f"TURN  customer={customer_id}  conv={conversation_id}",
+            f"user_msg: {user_msg!r}  |  "
+            f"modules={customer.enabled_modules}  |  "
+            f"active_flow={session.active_flow_id}  step={session.current_step_id}",
+        )
+
         messages: list[dict] = [{"role": "user", "content": user_msg}]
         escalated = False
         final_text = ""
-        for _ in range(MAX_TOOL_ROUNDS):
+
+        for round_n in range(MAX_TOOL_ROUNDS):
+            # ── DEBUG: LLM call ─────────────────────────────────────────────
+            _dbg(f"LLM CALL  round={round_n + 1}/{MAX_TOOL_ROUNDS}  model={get_settings().agent_model}")
+
             out = complete_with_tools(messages=messages, tools=TOOL_DEFS, system=system)
+
+            # ── DEBUG: LLM response ─────────────────────────────────────────
+            tool_names = [c["name"] for c in out.get("tool_calls", [])]
+            _dbg(
+                f"LLM RESPONSE  stop_reason={out['stop_reason']}",
+                (
+                    f"tools_called={tool_names}"
+                    if tool_names
+                    else f"text={repr((out.get('text') or '')[:120])}"
+                ),
+            )
+
             if out["stop_reason"] != "tool_use":
                 final_text = out.get("text") or ""
                 break
+
             # Build provider-appropriate assistant message
             model = get_settings().agent_model
             is_anthropic = "claude" in model
@@ -83,7 +125,10 @@ class AgentCore:
                         {
                             "id": c["id"],
                             "type": "function",
-                            "function": {"name": c["name"], "arguments": json.dumps(c["input"], ensure_ascii=False)},
+                            "function": {
+                                "name": c["name"],
+                                "arguments": json.dumps(c["input"], ensure_ascii=False),
+                            },
                         }
                         for c in out["tool_calls"]
                     ],
@@ -91,17 +136,29 @@ class AgentCore:
 
             tool_results_anthropic = []
             for call in out["tool_calls"]:
+                # ── DEBUG: tool dispatch ────────────────────────────────────
+                _dbg(
+                    f"TOOL CALL  [{call['name']}]",
+                    f"args={json.dumps(call['input'], ensure_ascii=False)}",
+                )
+
                 result = await dispatch(call["name"], call["input"], ctx)
                 if call["name"] == "escalate_to_human":
                     escalated = True
+
+                # ── DEBUG: tool result ──────────────────────────────────────
+                result_preview = json.dumps(result, ensure_ascii=False)
+                _dbg(
+                    f"TOOL RESULT  [{call['name']}]",
+                    result_preview[:300] + ("…" if len(result_preview) > 300 else ""),
+                )
+
                 if is_anthropic:
-                    tool_results_anthropic.append(
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": call["id"],
-                            "content": json.dumps(result, ensure_ascii=False),
-                        }
-                    )
+                    tool_results_anthropic.append({
+                        "type": "tool_result",
+                        "tool_use_id": call["id"],
+                        "content": json.dumps(result, ensure_ascii=False),
+                    })
                 else:
                     # OpenAI: each tool result is a separate "tool" role message
                     messages.append({
@@ -109,10 +166,15 @@ class AgentCore:
                         "tool_call_id": call["id"],
                         "content": json.dumps(result, ensure_ascii=False),
                     })
+
             if is_anthropic:
                 messages.append({"role": "user", "content": tool_results_anthropic})
 
+        # ── DEBUG: flow marker ──────────────────────────────────────────────
         clean_text, goto = parse_goto(final_text)
+        if goto:
+            _dbg(f"FLOW MARKER  [[goto:{goto}]]  active_flow={active_flow and active_flow.id}")
+
         if active_flow and goto:
             res = FlowEngine.resolve(active_flow, goto)
             if res.kind == "outcome":
@@ -123,13 +185,21 @@ class AgentCore:
                         transcript=ctx.transcript,
                     )
                     escalated = True
+                _dbg(f"FLOW OUTCOME  type={res.outcome and res.outcome.type}  → session cleared")
                 session.active_flow_id = None
                 session.current_step_id = None
             else:
                 if res.step is not None:
+                    _dbg(f"FLOW ADVANCE  → step={res.step.id}")
                     session.current_step_id = res.step.id
             await self.sessions.save(session)
         final_text = clean_text
+
+        # ── DEBUG: final reply ──────────────────────────────────────────────
+        _dbg(
+            f"FINAL REPLY  escalated={escalated}",
+            repr(final_text[:200]) + ("…" if len(final_text) > 200 else ""),
+        )
 
         await self.conversations.append(
             conversation_id, customer_id, Turn(role="user", content=user_msg)
