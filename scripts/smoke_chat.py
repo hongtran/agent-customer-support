@@ -29,8 +29,11 @@ logging.basicConfig(
     format="%(name)s  %(message)s",
 )
 # Giữ 3rd-party libs im lặng kể cả khi DEBUG
-for noisy in ("httpx", "httpcore", "aiobotocore", "botocore",
-              "urllib3", "openai", "anthropic", "google"):
+for noisy in ("httpx", "httpcore", "aiobotocore", "aioboto3",
+              "aioboto3.resources", "aioboto3.resources.action",
+              "aioboto3.resources.factory", "botocore", "botocore.auth",
+              "botocore.endpoint", "botocore.parsers", "urllib3",
+              "openai", "anthropic", "google"):
     logging.getLogger(noisy).setLevel(logging.WARNING)
 
 from agent_customer_support.models import CustomerProfile              # noqa: E402
