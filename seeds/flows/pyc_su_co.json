@@ -1,0 +1,31 @@
+{
+  "id": "pyc_su_co",
+  "title": "Xử lý PYC sự cố",
+  "module": "yeu-cau-thu-nghiem",
+  "scope": "global",
+  "version": 1,
+  "language": "vi",
+  "triggers": ["pyc sự cố", "xử lý phiếu sự cố", "tiếp nhận sự cố"],
+  "steps": [
+    {
+      "id": "tiep_nhan",
+      "say": "Vào menu **Sự cố → PYC sự cố**, tại tab **Chưa tiếp nhận** chọn phiếu cần xử lý rồi nhấn **Có** để tiếp nhận. Bạn đã thấy phiếu chưa?",
+      "next": [
+        {"when": "đã tiếp nhận được phiếu", "goto": "phe_duyet"},
+        {"when": "không thấy phiếu hoặc không có quyền", "goto": "escalate"}
+      ]
+    },
+    {
+      "id": "phe_duyet",
+      "say": "Sau khi xử lý xong, mở **CHI TIẾT PYC** và nhấn **Phê duyệt/Xác nhận** để hoàn tất phiếu. Bạn đã phê duyệt được chưa?",
+      "next": [
+        {"when": "đã phê duyệt thành công", "goto": "done"},
+        {"when": "gặp lỗi khi phê duyệt", "goto": "escalate"}
+      ]
+    }
+  ],
+  "outcomes": {
+    "done": {"type": "success", "say": "Hoàn tất! Bạn đã tiếp nhận và phê duyệt PYC sự cố."},
+    "escalate": {"type": "escalate", "reason": "Người dùng không xử lý được PYC sự cố"}
+  }
+}
