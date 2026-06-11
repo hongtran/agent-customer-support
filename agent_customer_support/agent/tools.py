@@ -30,11 +30,17 @@ TOOL_DEFS: list[dict] = [
     },
     {
         "name": "log_request",
-        "description": "Ghi nhận yêu cầu vượt khả năng phần mềm (thêm tính năng/đổi quy tắc) hoặc lỗi.",
+        "description": (
+            "Ghi nhận yêu cầu KHÔNG trả lời được từ tài liệu. Dùng khi: "
+            "(1) câu hỏi không có đáp án trong tài liệu → type='how_to_missing'; "
+            "(2) khách yêu cầu thêm tính năng/đổi quy tắc → type='feature'; "
+            "(3) khách báo lỗi phần mềm → type='bug'. "
+            "BẮT BUỘC gọi tool này thay vì bịa câu trả lời khi không có thông tin."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "type": {"type": "string", "enum": ["feature", "bug"]},
+                "type": {"type": "string", "enum": ["feature", "bug", "how_to_missing"]},
                 "summary": {"type": "string"},
                 "module": {"type": "string"},
             },

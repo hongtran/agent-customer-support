@@ -49,27 +49,28 @@ DEMO_CASES = {
         "msgs": [
             "Tên mẫu khi tạo đơn hàng thì nhập như thế nào?",
             "Địa điểm lấy mẫu không có thì điền gì?",
+            "Làm sao xử lý PYC sự cố?"
         ],
     },
-    "flow": {
-        "desc": "PATH B — Flow guidance (list_flows → get_flow → dẫn từng bước)",
-        "conv": "smoke-flow",
-        "msgs": [
-            # Turn 1: trigger get_flow — yêu cầu hướng dẫn từng bước rõ ràng
-            "Hướng dẫn tôi từng bước xử lý PYC sự cố, tôi chưa biết bắt đầu từ đâu",
-            # Turn 2: theo flow — agent đang ở step 'tiep_nhan', user xác nhận
-            "tôi đã vào menu và thấy phiếu rồi",
-            # Turn 3: theo flow — agent ở step 'phe_duyet', user gặp lỗi
-            "tôi nhấn phê duyệt nhưng bị lỗi",
-        ],
-    },
-    "feature": {
-        "desc": "PATH C — Feature request (log_request)",
-        "conv": "smoke-feat",
-        "msgs": [
-            "Tôi muốn thêm cột địa điểm lấy mẫu vào màn hình danh sách đơn hàng",
-        ],
-    },
+    # "flow": {
+    #     "desc": "PATH B — Flow guidance (list_flows → get_flow → dẫn từng bước)",
+    #     "conv": "smoke-flow",
+    #     "msgs": [
+    #         # Turn 1: trigger get_flow — yêu cầu hướng dẫn từng bước rõ ràng
+    #         "Hướng dẫn tôi từng bước xử lý PYC sự cố, tôi chưa biết bắt đầu từ đâu",
+    #         # Turn 2: theo flow — agent đang ở step 'tiep_nhan', user xác nhận
+    #         "tôi đã vào menu và thấy phiếu rồi",
+    #         # Turn 3: theo flow — agent ở step 'phe_duyet', user gặp lỗi
+    #         "tôi nhấn phê duyệt nhưng bị lỗi",
+    #     ],
+    # },
+    # "feature": {
+    #     "desc": "PATH C — Feature request (log_request)",
+    #     "conv": "smoke-feat",
+    #     "msgs": [
+    #         "Tôi muốn thêm cột địa điểm lấy mẫu vào màn hình danh sách đơn hàng",
+    #     ],
+    # },
 }
 
 SEP  = "─" * 60

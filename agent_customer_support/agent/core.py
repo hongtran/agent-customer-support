@@ -21,10 +21,10 @@ _GOTO_RE = re.compile(r"\[\[goto:([a-zA-Z0-9_\-]+)\]\]")
 MAX_TOOL_ROUNDS = 6
 
 
-def _dbg(label: str, data: str = "", width: int = 72) -> None:
+def _dbg(label: str, data: str = "", width: int = 150) -> None:
     """Print a compact debug block — only active when logger is DEBUG."""
-    if not logger.isEnabledFor(logging.DEBUG):
-        return
+    # if not logger.isEnabledFor(logging.DEBUG):
+    #     return
     border = "─" * width
     print(f"\n\033[36m┌{border}┐\033[0m")
     print(f"\033[36m│ {label:<{width-1}}\033[0m\033[36m│\033[0m")
@@ -83,17 +83,20 @@ class AgentCore:
             f"TURN  customer={customer_id}  conv={conversation_id}",
             f"user_msg: {user_msg!r}  |  "
             f"modules={customer.enabled_modules}  |  "
-            f"active_flow={session.active_flow_id}  step={session.current_step_id}",
-            # f"system_message={system}"
+            f"active_flow={session.active_flow_id}  step={session.current_step_id}"
+            f"system_message={system}"
         )
 
-        messages: list[dict] = [{"role": "user", "content": user_msg}]
+        messages: list[dict] = [
+            {"role": t.role, "content": t.content} for t in conv.turns
+        ]
+        messages.append({"role": "user", "content": user_msg})
         escalated = False
         final_text = ""
 
         for round_n in range(MAX_TOOL_ROUNDS):
             # ── DEBUG: LLM call ─────────────────────────────────────────────
-            _dbg(f"LLM CALL  round={round_n + 1}/{MAX_TOOL_ROUNDS}  model={get_settings().agent_model} messages={messages}")
+            _dbg(f"LLM CALL  round={round_n + 1}/{MAX_TOOL_ROUNDS}  model={get_settings().agent_model}")
 
             out = complete_with_tools(messages=messages, tools=TOOL_DEFS, system=system)
 
@@ -102,9 +105,10 @@ class AgentCore:
             _dbg(
                 f"LLM RESPONSE  stop_reason={out['stop_reason']}",
                 (
-                    f"tools_called={tool_names}"
+                    f"tools_called={tool_names}" 
                     if tool_names
                     else f"text={repr((out.get('text') or '')[:120])}"
+                    f" messages={messages}"
                 ),
             )
 
@@ -151,7 +155,7 @@ class AgentCore:
                 result_preview = json.dumps(result, ensure_ascii=False)
                 _dbg(
                     f"TOOL RESULT  [{call['name']}]",
-                    result_preview[:300] + ("…" if len(result_preview) > 300 else ""),
+                    result_preview,
                 )
 
                 if is_anthropic:

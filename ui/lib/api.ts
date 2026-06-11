@@ -1,6 +1,6 @@
 // ui/lib/api.ts
 
-const BASE = "http://localhost:8000";
+const BASE = "http://127.0.0.1:8000";
 
 export interface ChatPayload {
   customer_id: string;

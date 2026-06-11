@@ -71,7 +71,7 @@ class Conversation(BaseModel):
 class RequestRecord(BaseModel):
     id: str
     customer_id: str
-    type: Literal["feature", "bug"]
+    type: Literal["feature", "bug", "how_to_missing"]
     summary: str
     module: str | None = None
     transcript: str = ""
