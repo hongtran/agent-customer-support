@@ -101,15 +101,41 @@ first-class outcome: triage re-runs each turn with the added context until inten
 
 ### 4.2 KnowledgeAgent resolution flow
 
+**Problem with score-only gating.** The retrieval `top_confidence` is a *similarity* score, not an
+"answer is present" score. Two failure modes observed:
+- **High score, wrong answer** — query shares many words with a doc, score inflates, but the passage
+  doesn't actually answer → hallucination risk.
+- **Medium score, correct answer** — user phrases the question in *their company's* jargon, so the
+  score is lower, yet the answer maps cleanly once terms are translated → needlessly clarified/logged.
+
+**Fix: the score is a hint, not the judge.** KnowledgeAgent is an *orchestrated retrieval pipeline*
+(not a model-driven tool loop), so the relevance gate is deterministic and testable. It uses a
+**hybrid grader** (LLM grades answer-presence only in the conflict zone) plus a **query-reformulation
+retry** for jargon mismatch, with a free **`[[no_answer]]` guard** in the compose step on the trusted
+high-score path.
+
 ```
-1. search_knowledge(user_goal)        # via RagClient
-2a. grounding_note == "clarification" -> ask ONE clarifying question (stays in KnowledgeAgent)
-2b. confident, docs answer the goal   -> answer -> resolved=true
-2c. docs confirm feature SHOULD work but user reports it doesn't
-                                      -> suspected_bug=true  (coordinator -> IssueVerificationAgent)
-2d. no docs / low confidence          -> log_request(how_to_missing); resolved=false
-                                         (coordinator -> EscalationAgent)
+run(message):
+  1. passages, conf, citations = search(message)            # via RagClient
+  2. present = decide_presence(conf, passages):
+        - conf >= 0.80 AND passages substantial  -> True (trust; compose still guards)
+        - conf <  0.50                            -> False (distrust)
+        - otherwise (medium band, or high+short)  -> GRADER LLM call: answer present? y/n
+  3. if not present:
+        query2 = reformulate(message, customer.enabled_modules + config_notes)  # jargon -> product terms
+        passages, conf, citations = search(query2); re-run decide_presence
+  4. if not present (after retry):
+        log_request(how_to_missing); resolved=false        # coordinator -> EscalationAgent
+  5. reply = compose(message, passages)   # answer STRICTLY from passages; may emit:
+        - [[no_answer]]            -> treat as not-present (covers high-score-wrong-answer) -> step 4
+        - [[suspected_bug:module]] -> suspected_bug=true  (coordinator -> IssueVerificationAgent)
+        - otherwise                -> resolved=true
 ```
+
+**Grader fires only on conflict** (medium band, or high score with suspiciously short passages), so
+confident, well-grounded turns stay cheap. `decide_presence` and the conflict rule are pure functions
+(unit-testable without an LLM). `rag_client.py`'s `grounding_note` is reframed to be a neutral hint
+(score + "decide answer-presence yourself"), no longer carrying the clarify/log decision.
 
 ### 4.3 IssueVerificationAgent
 
