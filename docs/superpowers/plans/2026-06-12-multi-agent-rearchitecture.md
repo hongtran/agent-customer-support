@@ -824,12 +824,15 @@ Create `tests/agents/test_prompts.py`:
 
 ```python
 from agent_customer_support.agents.prompts import (
-    TRIAGE_PROMPT, KNOWLEDGE_PROMPT, VERIFICATION_PROMPT, GUARDRAIL_OUTPUT_PROMPT,
+    TRIAGE_PROMPT, VERIFICATION_PROMPT, GUARDRAIL_OUTPUT_PROMPT,
+    KNOWLEDGE_GRADER_PROMPT, KNOWLEDGE_REFORMULATE_PROMPT, KNOWLEDGE_COMPOSE_PROMPT,
 )
 
 
 def test_prompts_are_nonempty_strings():
-    for p in (TRIAGE_PROMPT, KNOWLEDGE_PROMPT, VERIFICATION_PROMPT, GUARDRAIL_OUTPUT_PROMPT):
+    for p in (TRIAGE_PROMPT, VERIFICATION_PROMPT, GUARDRAIL_OUTPUT_PROMPT,
+              KNOWLEDGE_GRADER_PROMPT, KNOWLEDGE_REFORMULATE_PROMPT,
+              KNOWLEDGE_COMPOSE_PROMPT):
         assert isinstance(p, str) and len(p) > 20
 
 
@@ -838,8 +841,13 @@ def test_triage_mentions_clarify_and_route():
     assert "route" in TRIAGE_PROMPT.lower()
 
 
-def test_knowledge_forbids_hallucination():
-    assert "log_request" in KNOWLEDGE_PROMPT
+def test_grader_judges_content_not_score():
+    assert "answer_present" in KNOWLEDGE_GRADER_PROMPT
+
+
+def test_compose_has_no_answer_and_bug_markers():
+    assert "[[no_answer]]" in KNOWLEDGE_COMPOSE_PROMPT
+    assert "suspected_bug" in KNOWLEDGE_COMPOSE_PROMPT
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -867,19 +875,30 @@ Khi đã rõ ý định → action "route" với target:
 Trả về JSON: {"action":"clarify","question":"..."} hoặc {"action":"route","target":"knowledge|escalate"}.
 """
 
-KNOWLEDGE_PROMPT = """Bạn là trợ lý hỗ trợ phần mềm phòng thí nghiệm CenLab của Tâm Đức.
-Trả lời bằng tiếng Việt, ngắn gọn, chính xác THEO tài liệu.
+# KnowledgeAgent is an orchestrated pipeline making three distinct LLM calls:
+# GRADER (answer-presence), REFORMULATE (jargon -> product terms), COMPOSE (grounded answer).
 
-Quy trình:
-1. Gọi `search_knowledge` để tìm câu trả lời.
-2. Nếu grounding_note có "clarification" → đặt MỘT câu hỏi làm rõ, KHÔNG gọi log_request.
-3. Nếu tài liệu trả lời TRỰC TIẾP → trả lời.
-4. Nếu tài liệu xác nhận tính năng ĐÁNG LẼ hoạt động nhưng người dùng nói bị lỗi →
-   KẾT THÚC tin nhắn bằng marker [[suspected_bug:<module>]] để hệ thống thu thập bằng chứng.
-5. Nếu KHÔNG có tài liệu / độ liên quan thấp → gọi `log_request(type="how_to_missing", ...)`
-   và nói đã ghi nhận. TUYỆT ĐỐI KHÔNG bịa.
+KNOWLEDGE_GRADER_PROMPT = """Bạn là bộ chấm điểm độ liên quan cho RAG của phần mềm CenLab.
+Cho CÂU HỎI và các ĐOẠN TRÍCH (passages), hãy quyết định: các đoạn này có chứa câu trả lời
+TRỰC TIẾP cho câu hỏi không? Điểm tương đồng (similarity) KHÔNG quan trọng — chỉ xét NỘI DUNG.
+Trả về JSON: {"answer_present": true|false, "reason": "..."}.
+"""
 
-CHỐNG HALLUCINATION: chỉ trả lời từ passages thực sự trả lời câu hỏi.
+KNOWLEDGE_REFORMULATE_PROMPT = """Người dùng thường dùng thuật ngữ riêng của công ty họ, không khớp
+từ ngữ trong tài liệu phần mềm CenLab. Viết lại câu hỏi sang từ ngữ/khái niệm của phần mềm CenLab
+để tìm kiếm tốt hơn. Dùng danh sách module đang bật và ghi chú cấu hình (nếu có) làm gợi ý ánh xạ.
+Chỉ trả về MỘT câu truy vấn đã viết lại, không giải thích.
+"""
+
+KNOWLEDGE_COMPOSE_PROMPT = """Bạn là trợ lý hỗ trợ phần mềm CenLab của Tâm Đức.
+Trả lời bằng tiếng Việt, ngắn gọn, CHỈ dựa trên các đoạn trích được cung cấp.
+
+- Nếu các đoạn trích KHÔNG thực sự trả lời câu hỏi → KẾT THÚC bằng marker [[no_answer]] (đừng bịa).
+- Nếu tài liệu xác nhận tính năng ĐÁNG LẼ hoạt động nhưng người dùng nói bị lỗi →
+  KẾT THÚC bằng marker [[suspected_bug:<module>]] để hệ thống thu thập bằng chứng.
+- Ngược lại → trả lời trực tiếp, bám sát đoạn trích.
+
+CHỐNG HALLUCINATION: tuyệt đối không dùng kiến thức ngoài đoạn trích.
 """
 
 VERIFICATION_PROMPT = """Bạn đang xác minh một lỗi (bug) nghi ngờ của phần mềm CenLab.
@@ -1227,13 +1246,72 @@ git commit -m "feat: add TriageAgent (rules fast-path + clarify/route)"
 
 ---
 
-### Task 11: KnowledgeAgent (RAG loop + suspected-bug marker)
+### Task 11a: Reframe `grounding_note` as a neutral hint
+
+**Files:**
+- Modify: `agent_customer_support/rag_client.py:42-63`
+- Test: `tests/test_rag_client.py`
+
+The score-threshold instructions baked into `grounding_note` ("ask clarification" / "call log_request") move OUT of `rag_client` — that decision now belongs to `KnowledgeAgent`. `rag_client` returns the score as a neutral hint only.
+
+- [ ] **Step 1: Update the test**
+
+In `tests/test_rag_client.py`, replace assertions that check for "clarification"/"log_request" wording in `grounding_note` with:
+
+```python
+def test_grounding_note_is_neutral_hint():
+    # after building a result with top_confidence ~0.7
+    # grounding_note must NOT prescribe an action; it states the score + defers judgment
+    note = res["grounding_note"]
+    assert "log_request" not in note
+    assert "clarification" not in note
+    assert "0.7" in note or "confidence" in note.lower()
+```
+
+(Keep the rest of the existing rag_client test setup; only the grounding_note expectations change.)
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `poetry run pytest tests/test_rag_client.py -v`
+Expected: FAIL — current note contains "clarification"/"log_request".
+
+- [ ] **Step 3: Replace the grounding_note block**
+
+In `agent_customer_support/rag_client.py`, replace the threshold branches (lines ~46-56) with a single neutral note:
+
+```python
+        # grounding_note is a HINT ONLY. The similarity score does not tell you whether
+        # the passages actually answer the question — KnowledgeAgent judges that from the
+        # passage text. We just surface the score and defer the decision.
+        grounding = (
+            f"confidence={top_conf:.2f} (chỉ là gợi ý độ tương đồng, KHÔNG phải độ đúng). "
+            "Hãy tự đánh giá các passages có TRỰC TIẾP trả lời câu hỏi hay không."
+        )
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `poetry run pytest tests/test_rag_client.py -v`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add agent_customer_support/rag_client.py tests/test_rag_client.py
+git commit -m "refactor: make grounding_note a neutral score hint"
+```
+
+---
+
+### Task 11b: KnowledgeAgent (orchestrated pipeline: hybrid grader + reformulation)
 
 **Files:**
 - Create: `agent_customer_support/agents/knowledge.py`
 - Test: `tests/agents/test_knowledge.py`
 
-Reuses the existing tool loop pattern from old `core.py` but **scoped to knowledge tools** (`search_knowledge`, `log_request`). Parses a `[[suspected_bug:<module>]]` marker into `suspected_bug=True`.
+KnowledgeAgent is a **deterministic pipeline** (not a model-driven tool loop), so the relevance gate is explicit and testable. It calls `ctx.rag.search()` directly, decides answer-presence with a hybrid grader, reformulates once on miss, then composes a grounded answer. Three pure-ish helpers are unit-tested without an LLM; the LLM steps (`_grade`, `_reformulate`, `_compose`) are patched individually.
+
+Conflict rule (`needs_grading`): grade only when the score is unreliable — medium band `[0.50, 0.80)`, or high score `>= 0.80` with suspiciously short/few passages.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1242,7 +1320,9 @@ Create `tests/agents/test_knowledge.py`:
 ```python
 import pytest
 from unittest.mock import patch, AsyncMock
-from agent_customer_support.agents.knowledge import KnowledgeAgent, parse_suspected_bug
+from agent_customer_support.agents.knowledge import (
+    KnowledgeAgent, parse_markers, needs_grading,
+)
 from agent_customer_support.agents.context import TurnContext
 from agent_customer_support.models import CustomerProfile, SessionState, Conversation
 
@@ -1260,37 +1340,99 @@ def _ctx(message="cách tạo phiếu?") -> TurnContext:
     )
 
 
-def test_parse_suspected_bug_found():
-    assert parse_suspected_bug("Có vẻ lỗi. [[suspected_bug:xet-nghiem]]") == (
-        "Có vẻ lỗi.", "xet-nghiem",
-    )
+# ---- pure helpers ----
+
+def test_needs_grading_medium_band_true():
+    assert needs_grading(0.70, ["a" * 500]) is True
 
 
-def test_parse_suspected_bug_absent():
-    assert parse_suspected_bug("trả lời bình thường") == ("trả lời bình thường", None)
+def test_needs_grading_high_long_passages_false():
+    assert needs_grading(0.88, ["a" * 500]) is False
 
 
-async def test_direct_answer_resolved():
+def test_needs_grading_high_but_short_passages_true():
+    assert needs_grading(0.88, ["short"]) is True
+
+
+def test_needs_grading_no_passages_false():
+    assert needs_grading(0.70, []) is False
+
+
+def test_needs_grading_low_false():
+    assert needs_grading(0.30, ["a" * 500]) is False
+
+
+def test_parse_markers_no_answer():
+    clean, kind, mod = parse_markers("Không rõ. [[no_answer]]")
+    assert kind == "no_answer" and "[[no_answer]]" not in clean
+
+
+def test_parse_markers_suspected_bug():
+    clean, kind, mod = parse_markers("Đáng lẽ chạy. [[suspected_bug:xet-nghiem]]")
+    assert kind == "suspected_bug" and mod == "xet-nghiem"
+
+
+def test_parse_markers_plain_answer():
+    clean, kind, mod = parse_markers("Vào menu X.")
+    assert kind is None and mod is None and clean == "Vào menu X."
+
+
+# ---- pipeline branches ----
+
+async def test_high_confidence_composes_answer():
     ctx = _ctx()
-    seq = [{"stop_reason": "end_turn", "text": "Vào menu X rồi tạo.", "tool_calls": []}]
-    with patch("agent_customer_support.agents.knowledge.complete_with_tools",
-               side_effect=seq):
+    ctx.rag.search.return_value = {
+        "passages": ["x" * 500], "citations": ["c#1"], "top_confidence": 0.9,
+    }
+    with patch("agent_customer_support.agents.knowledge.complete_text",
+               return_value="Vào menu X rồi tạo."):
         res = await KnowledgeAgent().run(ctx)
     assert res.resolved is True
     assert "menu X" in res.reply
-    assert res.suspected_bug is False
+    ctx.rag.search.assert_awaited_once()  # no reformulation needed
+
+
+async def test_medium_band_grader_present_then_answer():
+    ctx = _ctx("thuật ngữ riêng của cty")
+    ctx.rag.search.return_value = {
+        "passages": ["p" * 500], "citations": [], "top_confidence": 0.70,
+    }
+    with patch("agent_customer_support.agents.knowledge.KnowledgeAgent._grade",
+               new=AsyncMock(return_value=True)), \
+         patch("agent_customer_support.agents.knowledge.complete_text",
+               return_value="Trong phần mềm gọi là Y, làm thế này."):
+        res = await KnowledgeAgent().run(ctx)
+    assert res.resolved is True
+    assert "Y" in res.reply
+
+
+async def test_no_answer_marker_reformulates_then_logs():
+    ctx = _ctx("hỏi linh tinh")
+    ctx.rag.search.return_value = {
+        "passages": ["p" * 500], "citations": [], "top_confidence": 0.90,
+    }
+    # compose returns no_answer both times -> reformulate once -> log_request
+    with patch("agent_customer_support.agents.knowledge.KnowledgeAgent._reformulate",
+               new=AsyncMock(return_value="reworded")), \
+         patch("agent_customer_support.agents.knowledge.complete_text",
+               return_value="Không có. [[no_answer]]"):
+        res = await KnowledgeAgent().run(ctx)
+    assert res.resolved is False
+    assert ctx.rag.search.await_count == 2          # original + reformulated
+    ctx.backlog.add.assert_awaited_once()
+    assert ctx.backlog.add.call_args.kwargs["type"] == "how_to_missing"
 
 
 async def test_suspected_bug_marker_sets_flag():
     ctx = _ctx("tính năng A bị lỗi")
-    seq = [{"stop_reason": "end_turn",
-            "text": "Tính năng này đáng lẽ hoạt động. [[suspected_bug:xet-nghiem]]",
-            "tool_calls": []}]
-    with patch("agent_customer_support.agents.knowledge.complete_with_tools",
-               side_effect=seq):
+    ctx.rag.search.return_value = {
+        "passages": ["p" * 500], "citations": [], "top_confidence": 0.90,
+    }
+    with patch("agent_customer_support.agents.knowledge.complete_text",
+               return_value="Đáng lẽ chạy. [[suspected_bug:xet-nghiem]]"):
         res = await KnowledgeAgent().run(ctx)
     assert res.suspected_bug is True
-    assert res.evidence is not None and res.evidence["module"] == "xet-nghiem"
+    assert res.evidence["module"] == "xet-nghiem"
     assert "[[suspected_bug" not in res.reply
 ```
 
@@ -1304,95 +1446,141 @@ Expected: FAIL — module not found.
 Create `agent_customer_support/agents/knowledge.py`:
 
 ```python
-import json
 import re
 
 from agent_customer_support.agents.context import TurnContext
-from agent_customer_support.agents.prompts import KNOWLEDGE_PROMPT
-from agent_customer_support.llm import complete_with_tools
-from agent_customer_support.models import AgentResult
-from agent_customer_support.agent.tools import ToolContext, dispatch
+from agent_customer_support.agents.prompts import (
+    KNOWLEDGE_GRADER_PROMPT, KNOWLEDGE_REFORMULATE_PROMPT, KNOWLEDGE_COMPOSE_PROMPT,
+)
 from agent_customer_support.config import get_settings
+from agent_customer_support.llm import complete_text
+from agent_customer_support.models import AgentResult
 
+_NO_ANSWER_RE = re.compile(r"\[\[no_answer\]\]")
 _BUG_RE = re.compile(r"\[\[suspected_bug:([a-zA-Z0-9_\-]+)\]\]")
-KNOWLEDGE_TOOLS = [
-    {
-        "name": "search_knowledge",
-        "description": "Tìm trong tài liệu sản phẩm CenLab để trả lời câu hỏi nghiệp vụ.",
-        "input_schema": {"type": "object",
-                         "properties": {"query": {"type": "string"}},
-                         "required": ["query"]},
-    },
-    {
-        "name": "log_request",
-        "description": "Ghi nhận yêu cầu KHÔNG trả lời được từ tài liệu.",
-        "input_schema": {"type": "object", "properties": {
-            "type": {"type": "string", "enum": ["feature", "bug", "how_to_missing"]},
-            "summary": {"type": "string"}, "module": {"type": "string"}},
-            "required": ["type", "summary"]},
-    },
-]
-MAX_ROUNDS = 5
+
+HIGH = 0.80
+LOW = 0.50
+MIN_SUBSTANTIAL_CHARS = 200   # high score but shorter than this => grade
 
 
-def parse_suspected_bug(text: str) -> tuple[str, str | None]:
-    m = _BUG_RE.search(text or "")
-    if not m:
-        return (text or "", None)
-    return (_BUG_RE.sub("", text).strip(), m.group(1))
+def needs_grading(top_confidence: float, passages: list[str]) -> bool:
+    if not passages:
+        return False
+    if LOW <= top_confidence < HIGH:
+        return True
+    if top_confidence >= HIGH:
+        total = sum(len(p) for p in passages)
+        return total < MIN_SUBSTANTIAL_CHARS or len(passages) < 2
+    return False  # low score: skip grader, reformulate instead
+
+
+def parse_markers(text: str) -> tuple[str, str | None, str | None]:
+    """Return (clean_text, kind, module) where kind in {None,'no_answer','suspected_bug'}."""
+    bug = _BUG_RE.search(text or "")
+    if bug:
+        clean = _BUG_RE.sub("", text).strip()
+        return clean, "suspected_bug", bug.group(1)
+    if _NO_ANSWER_RE.search(text or ""):
+        return _NO_ANSWER_RE.sub("", text).strip(), "no_answer", None
+    return (text or "").strip(), None, None
+
+
+def _passages_block(passages: list[str]) -> str:
+    return "\n\n".join(f"[{i}] {p}" for i, p in enumerate(passages))
 
 
 class KnowledgeAgent:
     name = "knowledge"
 
-    async def run(self, ctx: TurnContext) -> AgentResult:
-        tool_ctx = ToolContext(
-            customer=ctx.customer, rag=ctx.rag, flow_store=ctx.flow_store,
-            backlog=ctx.backlog, escalator=ctx.escalator,
-            conversation_id=ctx.session.conversation_id, transcript=ctx.transcript,
+    async def _grade(self, question: str, passages: list[str]) -> bool:
+        raw = complete_text(
+            messages=[{"role": "user",
+                       "content": f"CÂU HỎI: {question}\n\nĐOẠN TRÍCH:\n{_passages_block(passages)}"}],
+            system=KNOWLEDGE_GRADER_PROMPT,
         )
-        messages = [{"role": "user", "content": ctx.message}]
-        logged = False
-        final_text = ""
-        is_anthropic = "claude" in get_settings().agent_model
+        import json
+        try:
+            return bool(json.loads(raw).get("answer_present"))
+        except (json.JSONDecodeError, TypeError):
+            return False  # fail-closed: don't answer if grader is unparseable
 
-        for _ in range(MAX_ROUNDS):
-            out = complete_with_tools(messages=messages, tools=KNOWLEDGE_TOOLS,
-                                      system=KNOWLEDGE_PROMPT)
-            if out["stop_reason"] != "tool_use":
-                final_text = out.get("text") or ""
-                break
+    async def _reformulate(self, ctx: TurnContext, passages: list[str]) -> str:
+        hint = ", ".join(ctx.customer.enabled_modules)
+        notes = ctx.customer.config_notes or ""
+        raw = complete_text(
+            messages=[{"role": "user",
+                       "content": f"CÂU HỎI GỐC: {ctx.message}\nMODULE: {hint}\nGHI CHÚ: {notes}"}],
+            system=KNOWLEDGE_REFORMULATE_PROMPT,
+        )
+        return (raw or ctx.message).strip()
 
-            if is_anthropic:
-                messages.append({"role": "assistant", "content": out.get("text") or ""})
-                results = []
-                for call in out["tool_calls"]:
-                    if call["name"] == "log_request":
-                        logged = True
-                    r = await dispatch(call["name"], call["input"], tool_ctx)
-                    results.append({"type": "tool_result", "tool_use_id": call["id"],
-                                    "content": json.dumps(r, ensure_ascii=False)})
-                messages.append({"role": "user", "content": results})
-            else:
-                messages.append({"role": "assistant", "content": out.get("text"),
-                                 "tool_calls": [{"id": c["id"], "type": "function",
-                                                 "function": {"name": c["name"],
-                                                 "arguments": json.dumps(c["input"])}}
-                                                for c in out["tool_calls"]]})
-                for call in out["tool_calls"]:
-                    if call["name"] == "log_request":
-                        logged = True
-                    r = await dispatch(call["name"], call["input"], tool_ctx)
-                    messages.append({"role": "tool", "tool_call_id": call["id"],
-                                     "content": json.dumps(r, ensure_ascii=False)})
+    async def _compose(self, question: str, passages: list[str]) -> str:
+        return complete_text(
+            messages=[{"role": "user",
+                       "content": f"CÂU HỎI: {question}\n\nĐOẠN TRÍCH:\n{_passages_block(passages)}"}],
+            system=KNOWLEDGE_COMPOSE_PROMPT,
+        )
 
-        clean, bug_module = parse_suspected_bug(final_text)
-        if bug_module:
+    async def _present(self, ctx: TurnContext, passages: list[str], conf: float) -> bool:
+        if not passages:
+            return False
+        if needs_grading(conf, passages):
+            return await self._grade(ctx.message, passages)
+        return conf >= HIGH  # trust high, distrust low
+
+    async def run(self, ctx: TurnContext) -> AgentResult:
+        # 1. initial search
+        res = await ctx.rag.search(ctx.message,
+                                   collection=get_settings().product_collection)
+        passages = res.get("passages", []) or []
+        conf = res.get("top_confidence", 0.0)
+        citations = res.get("citations", []) or []
+
+        present = await self._present(ctx, passages, conf)
+
+        # 2. reformulate once on miss
+        if not present:
+            new_query = await self._reformulate(ctx, passages)
+            res = await ctx.rag.search(new_query,
+                                       collection=get_settings().product_collection)
+            passages = res.get("passages", []) or []
+            conf = res.get("top_confidence", 0.0)
+            citations = res.get("citations", []) or []
+            present = await self._present(ctx, passages, conf)
+
+        # 3. still nothing -> log + unresolved
+        if not present:
+            await ctx.backlog.add(
+                customer_id=ctx.customer.customer_id, type="how_to_missing",
+                summary=ctx.message, module=None, transcript=ctx.transcript)
+            return AgentResult(
+                reply="Mình chưa tìm thấy thông tin cụ thể này trong tài liệu. "
+                      "Đã ghi nhận để đội hỗ trợ bổ sung.",
+                resolved=False, citations=citations)
+
+        # 4. compose grounded answer (compose may still emit no_answer / suspected_bug)
+        composed = await self._compose(ctx.message, passages)
+        clean, kind, module = parse_markers(composed)
+
+        if kind == "no_answer":
+            await ctx.backlog.add(
+                customer_id=ctx.customer.customer_id, type="how_to_missing",
+                summary=ctx.message, module=None, transcript=ctx.transcript)
+            return AgentResult(
+                reply="Mình chưa tìm thấy thông tin cụ thể này trong tài liệu. "
+                      "Đã ghi nhận để đội hỗ trợ bổ sung.",
+                resolved=False, citations=citations)
+
+        if kind == "suspected_bug":
             return AgentResult(reply=clean, resolved=False, suspected_bug=True,
-                               evidence={"module": bug_module,
-                                         "summary": ctx.message})
-        return AgentResult(reply=clean, resolved=not logged)
+                               evidence={"module": module, "summary": ctx.message},
+                               citations=citations)
+
+        return AgentResult(reply=clean, resolved=True, citations=citations)
 ```
+
+> **Note for the implementer:** `_reformulate` is patched in `test_no_answer_marker_reformulates_then_logs`; in that test `complete_text` always returns `[[no_answer]]`, so both the first compose (after a trusted high score) and the post-reformulation compose return no_answer → exactly two `rag.search` calls → `log_request`. `test_log_request` flow uses `type="how_to_missing"` which the existing `RequestRecord`/`backlog.add` already accept.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1403,7 +1591,7 @@ Expected: PASS.
 
 ```bash
 git add agent_customer_support/agents/knowledge.py tests/agents/test_knowledge.py
-git commit -m "feat: add KnowledgeAgent with suspected-bug detection"
+git commit -m "feat: KnowledgeAgent orchestrated pipeline with hybrid grader + reformulation"
 ```
 
 ---
@@ -2268,7 +2456,7 @@ git commit -m "test: full regression after multi-agent re-architecture"
 
 ## Self-Review Notes (for the implementer)
 
-- **Behavior parity:** Tasks 11–12 reproduce the old `core.py` happy paths (RAG answer, flow goto). Tasks 9, 10, 13 add the new behavior (guardrails, clarify, verification). If the eval set regresses, check the KnowledgeAgent tool loop matches the old message-format branching.
+- **Behavior parity:** Task 11b (KnowledgeAgent, now an orchestrated grader+reformulation pipeline rather than the old model-driven tool loop) and Task 12 (FlowAgent) reproduce the old `core.py` answer/flow paths; Task 11a reframes `grounding_note`. Tasks 9, 10, 13 add new behavior (guardrails, clarify, verification). If the eval set regresses on deflection, check the grader threshold (`needs_grading`) and the compose `[[no_answer]]` guard — too aggressive grading lowers deflection, too lax raises hallucination.
 - **Provider branching** lives in one place now (`llm/__init__.py`); agents never branch on provider except when building multimodal content (Task 13).
 - **Spec B seam:** nothing in these tasks touches `RagClient`'s interface — the in-repo RAG migration can proceed independently afterward.
 ```
