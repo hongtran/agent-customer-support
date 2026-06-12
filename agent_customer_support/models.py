@@ -49,12 +49,22 @@ class CustomerProfile(BaseModel):
     config_notes: str | None = None
 
 
+# ---- Attachments ----
+
+
+class Attachment(BaseModel):
+    kind: Literal["image"]
+    media_type: str          # image/png | image/jpeg
+    data: str                # base64-encoded bytes
+
+
 # ---- Conversation ----
 
 
 class Turn(BaseModel):
     role: Literal["user", "assistant"]
     content: str
+    attachments: list[Attachment] = Field(default_factory=list)
     ts: datetime = Field(default_factory=_now)
 
 
@@ -85,6 +95,8 @@ class SessionState(BaseModel):
     conversation_id: str
     active_flow_id: str | None = None
     current_step_id: str | None = None
+    pending: Literal["verify_issue"] | None = None
+    pending_context: dict | None = None
     updated_at: datetime = Field(default_factory=_now)
 
 
@@ -95,6 +107,7 @@ class ChatRequest(BaseModel):
     customer_id: str
     conversation_id: str
     message: str
+    attachments: list[Attachment] = Field(default_factory=list)
 
 
 class ChatResponse(BaseModel):
@@ -102,3 +115,19 @@ class ChatResponse(BaseModel):
     reply: str
     citations: list[str] = Field(default_factory=list)
     escalated: bool = False
+
+
+# ---- Agent contract ----
+
+
+class AgentResult(BaseModel):
+    action: Literal["reply", "route"] = "reply"
+    reply: str = ""
+    routed_to: Literal["knowledge", "flow", "escalate"] | None = None
+    resolved: bool | None = None
+    suspected_bug: bool = False
+    evidence_complete: bool = False
+    evidence: dict | None = None
+    escalated: bool = False
+    new_session: SessionState | None = None
+    citations: list[str] = Field(default_factory=list)
