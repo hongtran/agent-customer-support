@@ -39,21 +39,13 @@ class RagClient:
         )
         top_conf = max(confs) if confs else 0.0
 
-        # grounding_note: explicit hint for the LLM about how much to trust these passages.
-        # High confidence (≥0.7) = passages likely contain a direct answer.
-        # Medium (0.5–0.7) = related topic, verify answer is explicitly stated before using.
-        # Low (<0.5) = weak match; do NOT answer from these passages.
-        if top_conf >= 0.80:
-            grounding = f"confidence={top_conf:.2f} — tài liệu có độ liên quan cao, kiểm tra xem có trả lời TRỰC TIẾP câu hỏi không."
-        elif top_conf >= 0.50:
-            grounding = (
-                f"confidence={top_conf:.2f} — tài liệu liên quan nhưng yếu. "
-                "Nếu đoạn trích TRẢ LỜI TRỰC TIẾP câu hỏi thì dùng. "
-                "Nếu KHÔNG tìm thấy câu trả lời cụ thể → ĐẶT CÂU HỎI LÀM RÕ (clarification) "
-                "để người dùng cung cấp thêm thông tin; KHÔNG gọi log_request ngay."
-            )
-        else:
-            grounding = f"confidence={top_conf:.2f} — độ liên quan thấp. KHÔNG trả lời từ đây, hãy gọi log_request."
+        # grounding_note is a HINT ONLY. The similarity score does not tell you whether
+        # the passages actually answer the question — KnowledgeAgent judges that from the
+        # passage text. We just surface the score and defer the decision.
+        grounding = (
+            f"confidence={top_conf:.2f} (chỉ là gợi ý độ tương đồng, KHÔNG phải độ đúng). "
+            "Hãy tự đánh giá các passages có TRỰC TIẾP trả lời câu hỏi hay không."
+        )
 
         return {
             "passages": docs,

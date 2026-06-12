@@ -25,3 +25,22 @@ async def test_search_returns_passages_and_citations():
     assert res["top_confidence"] == 0.82
     assert "Bước 1" in res["passages"][0]
     assert "hdsd#3.4" in res["citations"]
+
+
+@respx.mock
+async def test_grounding_note_is_neutral_hint():
+    respx.post("http://localhost:7799/rag/query").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "documents": ["doc"],
+                "metadatas": [{"confidence": 0.7, "source_doc_id": "hdsd#1"}],
+            },
+        )
+    )
+    client = RagClient(base_url="http://localhost:7799")
+    res = await client.search("q", collection="cenlab")
+    note = res["grounding_note"]
+    assert "log_request" not in note
+    assert "clarification" not in note
+    assert "0.7" in note or "confidence" in note.lower()
