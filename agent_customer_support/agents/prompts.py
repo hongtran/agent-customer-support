@@ -6,7 +6,7 @@ chưa rõ → trả về action "clarify" kèm MỘT câu hỏi ngắn để hi�
 
 Khi đã rõ ý định → action "route" với target:
 - "knowledge": mọi câu hỏi nghiệp vụ, "cách làm", báo lỗi, đề xuất tính năng.
-  LƯU Ý: lời than phiền ("bị lỗi", "không chạy được", "thêm tính năng") KHÔNG được
+  LƯU Ý: lời than phiền ("bị lỗi", "không chạy được", "thêm tính năng", "đề nghị") KHÔNG được
   route thẳng tới escalate — luôn để knowledge thử giải quyết trước.
 - "escalate": CHỈ khi người dùng nói rõ muốn gặp nhân viên/người thật.
 

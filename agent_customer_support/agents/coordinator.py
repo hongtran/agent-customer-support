@@ -79,7 +79,6 @@ class Coordinator:
                 result = AgentResult(reply=_FALLBACK_REPLY,
                                      escalated=result.escalated,
                                      new_session=result.new_session)
-
             resp = await self._finish(ctx, result, session)
             turn.update(output={"reply": resp.reply, "escalated": resp.escalated})
             return resp
