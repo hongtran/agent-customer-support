@@ -1,5 +1,5 @@
 """
-Smoke test + interactive debug cho AgentCore.
+Smoke test + interactive debug cho Coordinator.
 
 Usage:
     # Normal (chỉ thấy USER/AGENT)
@@ -38,7 +38,7 @@ for noisy in ("httpx", "httpcore", "aiobotocore", "aioboto3",
 
 from agent_customer_support.models import CustomerProfile              # noqa: E402
 from agent_customer_support.stores.customer_registry import CustomerRegistry  # noqa: E402
-from agent_customer_support.agent.core import AgentCore                # noqa: E402
+from agent_customer_support.agents.coordinator import Coordinator       # noqa: E402
 
 # ── Demo question sets ─────────────────────────────────────────────────────
 # Chạy mặc định: cả 3 path
@@ -77,7 +77,7 @@ SEP  = "─" * 60
 SEP2 = "═" * 60
 
 
-async def chat(agent: AgentCore, customer_id: str, conv_id: str, msg: str) -> None:
+async def chat(agent: Coordinator, customer_id: str, conv_id: str, msg: str) -> None:
     print(f"\n\033[33m▶ USER:\033[0m  {msg}")
     if DEBUG_MODE:
         print(f"\033[90m{SEP}\033[0m")
@@ -85,7 +85,8 @@ async def chat(agent: AgentCore, customer_id: str, conv_id: str, msg: str) -> No
     reply = await agent.handle_turn(
         customer_id=customer_id,
         conversation_id=conv_id,
-        user_msg=msg,
+        message=msg,
+        attachments=[],
     )
 
     if DEBUG_MODE:
@@ -112,7 +113,7 @@ async def main() -> None:
         enabled_modules=["yeu-cau-thu-nghiem", "xet-nghiem"],
     ))
 
-    agent   = AgentCore()
+    agent   = Coordinator()
     conv_id = "smoke1"
 
     if INTERACTIVE_MODE:
