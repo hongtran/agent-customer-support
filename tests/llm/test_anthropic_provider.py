@@ -13,6 +13,7 @@ def test_parses_text_response():
     resp = SimpleNamespace(
         stop_reason="end_turn",
         content=[_block(type="text", text="hello")],
+        usage=SimpleNamespace(input_tokens=11, output_tokens=7),
     )
     client = MagicMock()
     client.messages.create.return_value = resp
@@ -34,6 +35,7 @@ def test_parses_tool_use():
             _block(type="tool_use", id="t1", name="search_knowledge",
                    input={"query": "x"}),
         ],
+        usage=SimpleNamespace(input_tokens=11, output_tokens=7),
     )
     client = MagicMock()
     client.messages.create.return_value = resp
@@ -47,3 +49,18 @@ def test_parses_tool_use():
     assert out["tool_calls"] == [
         {"id": "t1", "name": "search_knowledge", "input": {"query": "x"}}
     ]
+
+
+def test_surfaces_usage():
+    resp = SimpleNamespace(
+        stop_reason="end_turn",
+        content=[_block(type="text", text="hi")],
+        usage=SimpleNamespace(input_tokens=11, output_tokens=7),
+    )
+    client = MagicMock()
+    client.messages.create.return_value = resp
+    out = anthropic_complete_with_tools(
+        client=client, model="claude-3-5-sonnet",
+        messages=[{"role": "user", "content": "hi"}], tools=[], system=None,
+    )
+    assert out["usage"] == {"input": 11, "output": 7}

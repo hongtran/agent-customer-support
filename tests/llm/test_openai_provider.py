@@ -17,7 +17,10 @@ def test_to_openai_tools_shape():
 
 def test_parses_text_response():
     msg = SimpleNamespace(content="hello", tool_calls=None)
-    resp = SimpleNamespace(choices=[SimpleNamespace(message=msg, finish_reason="stop")])
+    resp = SimpleNamespace(
+        choices=[SimpleNamespace(message=msg, finish_reason="stop")],
+        usage=SimpleNamespace(prompt_tokens=9, completion_tokens=5),
+    )
     client = MagicMock()
     client.chat.completions.create.return_value = resp
     out = openai_complete_with_tools(
@@ -36,7 +39,10 @@ def test_parses_tool_calls():
                                  arguments=json.dumps({"query": "x"})),
     )
     msg = SimpleNamespace(content=None, tool_calls=[tc])
-    resp = SimpleNamespace(choices=[SimpleNamespace(message=msg, finish_reason="tool_calls")])
+    resp = SimpleNamespace(
+        choices=[SimpleNamespace(message=msg, finish_reason="tool_calls")],
+        usage=SimpleNamespace(prompt_tokens=9, completion_tokens=5),
+    )
     client = MagicMock()
     client.chat.completions.create.return_value = resp
     out = openai_complete_with_tools(
@@ -49,3 +55,32 @@ def test_parses_tool_calls():
     assert out["tool_calls"] == [
         {"id": "t1", "name": "search_knowledge", "input": {"query": "x"}}
     ]
+
+
+def test_surfaces_usage():
+    msg = SimpleNamespace(content="hello", tool_calls=None)
+    resp = SimpleNamespace(
+        choices=[SimpleNamespace(message=msg, finish_reason="stop")],
+        usage=SimpleNamespace(prompt_tokens=9, completion_tokens=5),
+    )
+    client = MagicMock()
+    client.chat.completions.create.return_value = resp
+    out = openai_complete_with_tools(
+        client=client, model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}], tools=[], system=None,
+    )
+    assert out["usage"] == {"input": 9, "output": 5}
+
+
+def test_usage_none_safe():
+    msg = SimpleNamespace(content="hello", tool_calls=None)
+    resp = SimpleNamespace(
+        choices=[SimpleNamespace(message=msg, finish_reason="stop")], usage=None,
+    )
+    client = MagicMock()
+    client.chat.completions.create.return_value = resp
+    out = openai_complete_with_tools(
+        client=client, model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}], tools=[], system=None,
+    )
+    assert out["usage"] is None

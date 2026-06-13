@@ -22,8 +22,14 @@ def anthropic_complete_with_tools(
         elif block.type == "tool_use":
             tool_calls.append({"id": block.id, "name": block.name, "input": block.input})
 
+    usage = getattr(resp, "usage", None)
+    usage_details = (
+        {"input": usage.input_tokens, "output": usage.output_tokens}
+        if usage is not None else None
+    )
     return {
         "stop_reason": resp.stop_reason,
         "text": "".join(text_parts) or None,
         "tool_calls": tool_calls,
+        "usage": usage_details,
     }

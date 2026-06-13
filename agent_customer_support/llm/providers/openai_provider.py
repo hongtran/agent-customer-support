@@ -17,7 +17,7 @@ def to_openai_tools(tool_defs: list[dict]) -> list[dict]:
 
 def openai_complete_with_tools(
     *, client, model: str, messages: list[dict],
-    tools: list[dict], system: str | None, max_tokens: int = 1500,
+    tools: list[dict], system: str | None, max_tokens: int = 5000,
 ) -> dict:
     msgs = list(messages)
     if system:
@@ -40,8 +40,14 @@ def openai_complete_with_tools(
         })
 
     stop_reason = "tool_use" if tool_calls else choice.finish_reason
+    usage = getattr(resp, "usage", None)
+    usage_details = (
+        {"input": usage.prompt_tokens, "output": usage.completion_tokens}
+        if usage is not None else None
+    )
     return {
         "stop_reason": stop_reason,
         "text": msg.content,
         "tool_calls": tool_calls,
+        "usage": usage_details,
     }
