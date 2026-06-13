@@ -3,6 +3,7 @@ from typing import Any
 
 from agent_customer_support.config import get_settings
 from agent_customer_support.models import CustomerProfile
+from agent_customer_support.observability import tracing
 
 TOOL_DEFS: list[dict] = [
     {
@@ -71,7 +72,7 @@ class ToolContext:
     last_fetched_flow: Any = None   # set by get_flow → enables flow activation in core
 
 
-async def dispatch(name: str, args: dict, ctx: ToolContext) -> dict:
+async def _dispatch(name: str, args: dict, ctx: ToolContext) -> dict:
     if name == "search_knowledge":
         return await ctx.rag.search(args["query"], collection=get_settings().product_collection)
 
@@ -106,3 +107,10 @@ async def dispatch(name: str, args: dict, ctx: ToolContext) -> dict:
         return {"escalated": True}
 
     return {"error": f"unknown_tool:{name}"}
+
+
+async def dispatch(name: str, args: dict, ctx: ToolContext) -> dict:
+    with tracing.span(f"tool.{name}", input=args) as sp:
+        result = await _dispatch(name, args, ctx)
+        sp.update(output=result)
+        return result

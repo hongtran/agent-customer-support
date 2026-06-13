@@ -7,6 +7,7 @@ from agent_customer_support.llm.providers.anthropic_provider import (
 from agent_customer_support.llm.providers.openai_provider import (
     openai_complete_with_tools,
 )
+from agent_customer_support.observability import tracing
 
 
 @lru_cache
@@ -29,15 +30,19 @@ def complete_with_tools(
     *, messages: list[dict], tools: list[dict], system: str | None = None
 ) -> dict:
     model = get_settings().agent_model
-    if _is_anthropic(model):
-        return anthropic_complete_with_tools(
-            client=_anthropic_client(), model=model,
-            messages=messages, tools=tools, system=system,
-        )
-    return openai_complete_with_tools(
-        client=_openai_client(), model=model,
-        messages=messages, tools=tools, system=system,
-    )
+    with tracing.generation("llm", model=model, input=messages) as gen:
+        if _is_anthropic(model):
+            out = anthropic_complete_with_tools(
+                client=_anthropic_client(), model=model,
+                messages=messages, tools=tools, system=system,
+            )
+        else:
+            out = openai_complete_with_tools(
+                client=_openai_client(), model=model,
+                messages=messages, tools=tools, system=system,
+            )
+        gen.update(output=out.get("text"), usage_details=out.get("usage"))
+        return out
 
 
 def complete_text(messages: list[dict], system: str | None = None) -> str:
