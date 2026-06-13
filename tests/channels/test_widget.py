@@ -12,11 +12,34 @@ def test_chat_endpoint_returns_reply():
     app.dependency_overrides[get_agent] = lambda: fake
     client = TestClient(app)
     resp = client.post(
-        "/widget/chat", json={"customer_id": "c1", "conversation_id": "cv1", "message": "hi"}
+        "/widget/chat",
+        json={"customer_id": "c1", "conversation_id": "cv1", "message": "hi"},
     )
     assert resp.status_code == 200
     body = resp.json()
     assert body["reply"] == "Xin chào" and body["conversation_id"] == "cv1"
+    app.dependency_overrides.clear()
+
+
+def test_chat_passes_attachments():
+    fake = AsyncMock()
+    fake.handle_turn.return_value = ChatResponse(conversation_id="cv1", reply="hi")
+    app.dependency_overrides[get_agent] = lambda: fake
+    client = TestClient(app)
+    resp = client.post(
+        "/widget/chat",
+        json={
+            "customer_id": "c1", "conversation_id": "cv1", "message": "hello",
+            "attachments": [
+                {"kind": "image", "media_type": "image/png", "data": "QUJD"}
+            ],
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["reply"] == "hi"
+    kwargs = fake.handle_turn.call_args.kwargs
+    assert kwargs["message"] == "hello"
+    assert len(kwargs["attachments"]) == 1
     app.dependency_overrides.clear()
 
 
