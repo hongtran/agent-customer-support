@@ -48,6 +48,28 @@ async def test_triage_clarify_returns_question():
     assert res.reply == "Bạn cần gì?"
 
 
+async def test_root_trace_uses_conversation_as_session(monkeypatch):
+    from contextlib import contextmanager
+    from agent_customer_support.agents import coordinator as coord_mod
+
+    captured = {}
+
+    @contextmanager
+    def fake_trace(name, *, session_id=None, user_id=None, tags=None,
+                   input=None, metadata=None):
+        captured["session_id"] = session_id
+        captured["user_id"] = user_id
+        yield MagicMock()
+
+    monkeypatch.setattr(coord_mod.tracing, "trace", fake_trace)
+    c = _coord()
+    c.triage.run = AsyncMock(return_value=AgentResult(action="reply", reply="ok"))
+    await c.handle_turn(customer_id="c1", conversation_id="cv1",
+                        message="?", attachments=[])
+    assert captured["session_id"] == "cv1"
+    assert captured["user_id"] == "c1"
+
+
 async def test_knowledge_resolved_returns_reply():
     c = _coord()
     c.triage.run = AsyncMock(return_value=AgentResult(action="route",
