@@ -1,3 +1,5 @@
+from functools import lru_cache
+
 from fastapi import APIRouter, Depends
 from agent_customer_support.models import ChatRequest, ChatResponse
 from agent_customer_support.agents.coordinator import Coordinator
@@ -5,6 +7,7 @@ from agent_customer_support.agents.coordinator import Coordinator
 router = APIRouter(prefix="/widget", tags=["widget"])
 
 
+@lru_cache
 def get_agent() -> Coordinator:
     return Coordinator()
 

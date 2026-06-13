@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, AsyncMock
-from agent_customer_support.agents.flow import FlowAgent, parse_goto
+from agent_customer_support.agents.flow import FlowAgent, parse_goto, build_assistant_message
 from agent_customer_support.agents.context import TurnContext
 from agent_customer_support.models import (
     CustomerProfile, SessionState, Conversation, Flow, FlowStep, FlowTransition,
@@ -59,3 +59,30 @@ async def test_outcome_clears_session():
         res = await FlowAgent().run(_ctx(session, fs))
     assert res.new_session.active_flow_id is None
     assert res.new_session.current_step_id is None
+
+
+def test_build_assistant_message_anthropic_echoes_tool_use():
+    out = {"text": "checking", "tool_calls": [
+        {"id": "t1", "name": "get_flow", "input": {"flow_id": "f1"}}]}
+    msg = build_assistant_message(out, is_anthropic=True)
+    assert msg["role"] == "assistant"
+    blocks = msg["content"]
+    assert {"type": "text", "text": "checking"} in blocks
+    assert {"type": "tool_use", "id": "t1", "name": "get_flow",
+            "input": {"flow_id": "f1"}} in blocks
+
+
+def test_build_assistant_message_anthropic_no_text_block_when_empty():
+    out = {"text": None, "tool_calls": [
+        {"id": "t1", "name": "get_flow", "input": {"flow_id": "f1"}}]}
+    blocks = build_assistant_message(out, is_anthropic=True)["content"]
+    assert all(b["type"] != "text" for b in blocks)
+    assert any(b["type"] == "tool_use" for b in blocks)
+
+
+def test_build_assistant_message_openai_shape():
+    out = {"text": None, "tool_calls": [
+        {"id": "t1", "name": "get_flow", "input": {"flow_id": "f1"}}]}
+    msg = build_assistant_message(out, is_anthropic=False)
+    assert msg["tool_calls"][0]["id"] == "t1"
+    assert msg["tool_calls"][0]["function"]["name"] == "get_flow"

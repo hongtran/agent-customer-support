@@ -46,3 +46,8 @@ def test_chat_passes_attachments():
 def test_health():
     client = TestClient(app)
     assert client.get("/health").json() == {"status": "ok"}
+
+
+def test_get_agent_is_singleton():
+    from agent_customer_support.channels.widget import get_agent
+    assert get_agent() is get_agent()

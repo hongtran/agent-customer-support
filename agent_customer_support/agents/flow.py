@@ -10,6 +10,36 @@ from agent_customer_support.agent.prompt import build_system_prompt
 from agent_customer_support.agent.tools import ToolContext, dispatch
 
 _GOTO_RE = re.compile(r"\[\[goto:([a-zA-Z0-9_\-]+)\]\]")
+
+
+def build_assistant_message(out: dict, is_anthropic: bool) -> dict:
+    """Build the assistant turn echoing the model's tool calls for the next round.
+
+    Anthropic: content is a list of text + tool_use blocks (required so the following
+    tool_result blocks have matching tool_use). OpenAI: content is the text (may be None)
+    plus a tool_calls array.
+    """
+    if is_anthropic:
+        blocks: list[dict] = []
+        text = out.get("text")
+        if text:
+            blocks.append({"type": "text", "text": text})
+        for c in out["tool_calls"]:
+            blocks.append({"type": "tool_use", "id": c["id"],
+                           "name": c["name"], "input": c["input"]})
+        return {"role": "assistant", "content": blocks}
+    return {
+        "role": "assistant",
+        "content": out.get("text"),
+        "tool_calls": [
+            {"id": c["id"], "type": "function",
+             "function": {"name": c["name"],
+                          "arguments": json.dumps(c["input"])}}
+            for c in out["tool_calls"]
+        ],
+    }
+
+
 FLOW_TOOLS = [
     {"name": "list_flows",
      "description": "Liệt kê các quy trình khả dụng cho khách hàng hiện tại.",
@@ -54,8 +84,8 @@ class FlowAgent:
             if out["stop_reason"] != "tool_use":
                 final_text = out.get("text") or ""
                 break
+            messages.append(build_assistant_message(out, is_anthropic))
             if is_anthropic:
-                messages.append({"role": "assistant", "content": out.get("text") or ""})
                 results = []
                 for call in out["tool_calls"]:
                     r = await dispatch(call["name"], call["input"], tool_ctx)
@@ -63,11 +93,6 @@ class FlowAgent:
                                     "content": json.dumps(r, ensure_ascii=False)})
                 messages.append({"role": "user", "content": results})
             else:
-                messages.append({"role": "assistant", "content": out.get("text"),
-                                 "tool_calls": [{"id": c["id"], "type": "function",
-                                                 "function": {"name": c["name"],
-                                                 "arguments": json.dumps(c["input"])}}
-                                                for c in out["tool_calls"]]})
                 for call in out["tool_calls"]:
                     r = await dispatch(call["name"], call["input"], tool_ctx)
                     messages.append({"role": "tool", "tool_call_id": call["id"],
