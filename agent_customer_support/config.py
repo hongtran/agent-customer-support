@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     table_conversations: str = "acs_conversations"
     table_requests: str = "acs_requests"
 
+    # observability
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: str | None = None
+    langfuse_host: str = "https://cloud.langfuse.com"
+
 
 @lru_cache
 def get_settings() -> Settings:
