@@ -45,7 +45,7 @@ class FlowAgent:
             backlog=ctx.backlog, escalator=ctx.escalator,
             conversation_id=session.conversation_id, transcript=ctx.transcript,
         )
-        messages = [{"role": "user", "content": ctx.message}]
+        messages: list[dict] = [{"role": "user", "content": ctx.message}]
         final_text = ""
         is_anthropic = "claude" in get_settings().agent_model
 
