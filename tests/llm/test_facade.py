@@ -1,5 +1,5 @@
 from unittest.mock import patch, MagicMock
-from agent_customer_support.llm import complete_with_tools, complete_text
+from agent_customer_support.llm import complete_with_tools
 
 
 def test_routes_to_anthropic_for_claude_model():
