@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from agent_customer_support.channels.widget import router as widget_router, get_agent
+from agent_customer_support.observability import tracing
 from agent_customer_support.stores.customer_registry import CustomerRegistry
 from agent_customer_support.stores.conversation_store import ConversationStore
 from agent_customer_support.stores.flow_store import FlowStore
@@ -19,6 +20,8 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             logger.warning("Store init skipped (%s): %s", type(store).__name__, exc)
     yield
+    # Flush any buffered traces on shutdown (no-op when tracing is disabled).
+    tracing.flush()
 
 
 app = FastAPI(title="CenLab Support Agent", lifespan=lifespan)

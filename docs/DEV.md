@@ -14,7 +14,9 @@ poetry env use "$(pyenv which python3.13)"
 # 2. Install dependencies
 poetry install
 
-# 3. Install enterprise_llm_service LLM layer (manual step — not in Poetry registry)
+# 3. (Optional) Install enterprise_llm_service — ONLY needed for offline KB indexing
+#    (scripts/index_kb.py). The runtime LLM client is vendored; the agent no longer
+#    imports enterprise_llm_service.
 poetry run pip install --no-deps /path/to/enterprise-llm-service/dist/enterprise_llm_service-1.0.3-py3-none-any.whl
 
 # 4. Start dev infra (DynamoDB Local + Redis)
@@ -66,10 +68,42 @@ poetry run python eval/golden_from_excel.py "/path/to/1. Cac yeu cau TTP-Cenlab 
 poetry run python eval/run_eval.py eval/golden.json
 ```
 
+## Observability (Langfuse)
+
+The agent emits a hierarchical trace per turn — root span (one conversation turn)
+→ per-agent spans (`agent.triage`, `agent.knowledge`, `agent.flow`,
+`agent.verification`, `agent.escalation`) → LLM generations (`llm`, with model +
+token usage), tool spans (`tool.<name>`), and `rag.search`. Traces are grouped by
+`session_id = conversation_id`, so a whole multi-turn conversation (including a
+`verify_issue` flow that resumes across turns) shows as one timeline.
+
+**Enable it:** set three env vars (otherwise tracing is a complete no-op):
+
+```bash
+LANGFUSE_PUBLIC_KEY=pk-...
+LANGFUSE_SECRET_KEY=sk-...
+LANGFUSE_HOST=https://cloud.langfuse.com   # or your self-hosted URL
+```
+
+- **Quickest:** create a free project at https://cloud.langfuse.com and copy the keys.
+- **Self-host:** run Langfuse's official stack (`git clone langfuse/langfuse && docker compose up`)
+  and point `LANGFUSE_HOST` at it. (Langfuse is its own multi-container stack —
+  web/worker/postgres/clickhouse/minio — so it lives in its own compose, not ours.)
+
+All instrumentation goes through `agent_customer_support/observability/tracing.py`
+(the only module that imports `langfuse`); it fails open — any tracing error is
+logged and never breaks a request. Buffered traces are flushed on server shutdown.
+
 ## LLM layer note
 
-`enterprise_llm_service` is installed as a local wheel (`--no-deps`). Runtime deps (anthropic, openai, tiktoken, google-genai, environs, tenacity) are declared in `pyproject.toml` and installed by `poetry install`. On a fresh checkout, you must re-run the `pip install --no-deps` step after `poetry install`.
+The runtime LLM client is **vendored** in `agent_customer_support/llm/` (Anthropic +
+OpenAI, selected by `AGENT_MODEL`); the agent does not import `enterprise_llm_service`.
+Runtime deps (anthropic, openai) are declared in `pyproject.toml`.
 
-Required dummy env vars for tests (already in conftest.py):
+`enterprise_llm_service` is only needed for the **offline KB indexing** script
+(`scripts/index_kb.py`), installed as a local wheel (`--no-deps`). The dummy env vars
+below exist solely so that script's imports resolve; they are not used by the agent.
+
+Dummy env vars for the offline indexing script (already stubbed in conftest.py for tests):
 - QDRANT_ENDPOINT, QDRANT_API_KEY, CELERY_BROKER_URL, CELERY_RESULT_BACKEND
 - OPENAI_API_KEY, TOGETHERAI_API_KEY
