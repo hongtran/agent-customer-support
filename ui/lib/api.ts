@@ -2,10 +2,17 @@
 
 const BASE = "http://127.0.0.1:8000";
 
+export interface Attachment {
+  kind: "image";
+  media_type: string;
+  data: string; // base64, no data: prefix
+}
+
 export interface ChatPayload {
   customer_id: string;
   conversation_id: string;
   message: string;
+  attachments?: Attachment[];
 }
 
 export interface ChatResult {

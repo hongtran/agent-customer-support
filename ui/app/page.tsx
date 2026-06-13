@@ -4,7 +4,7 @@ import { useState } from "react";
 import ConfigBar from "@/components/ConfigBar";
 import MessageList, { Message } from "@/components/MessageList";
 import InputBar from "@/components/InputBar";
-import { sendMessage } from "@/lib/api";
+import { sendMessage, Attachment } from "@/lib/api";
 
 export default function Home() {
   const [customerId, setCustomerId] = useState("ttp");
@@ -17,14 +17,16 @@ export default function Home() {
     setMessages([]);
   };
 
-  const handleSend = async (text: string) => {
-    setMessages((prev) => [...prev, { role: "user", content: text }]);
+  const handleSend = async (text: string, attachments: Attachment[]) => {
+    const userContent = text + (attachments.length > 0 ? ` 📎 ${attachments.length} image${attachments.length > 1 ? "s" : ""}` : "");
+    setMessages((prev) => [...prev, { role: "user", content: userContent }]);
     setLoading(true);
     try {
       const result = await sendMessage({
         customer_id: customerId,
         conversation_id: conversationId,
         message: text,
+        attachments: attachments.length > 0 ? attachments : undefined,
       });
       setMessages((prev) => [...prev, { role: "agent", content: result.reply }]);
     } catch (err) {
