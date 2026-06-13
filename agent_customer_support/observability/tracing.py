@@ -42,6 +42,42 @@ def enabled() -> bool:
 
 
 @contextmanager
+def trace(
+    name: str,
+    *,
+    session_id: str | None = None,
+    user_id: str | None = None,
+    tags: list[str] | None = None,
+    input: Any = None,
+    metadata: dict | None = None,
+) -> Iterator[Any]:
+    """Root of one turn. Sets trace-level attributes (session_id groups a whole
+    conversation across turns) and opens the root span. No-op when tracing is off.
+
+    Only the Langfuse setup is guarded; exceptions from the wrapped body propagate.
+    """
+    client = _client()
+    if client is None:
+        yield _NOOP
+        return
+    try:
+        from langfuse import propagate_attributes
+
+        attr_cm = propagate_attributes(
+            session_id=session_id, user_id=user_id, tags=tags
+        )
+        span_cm = client.start_as_current_observation(
+            name=name, as_type="span", input=input, metadata=metadata
+        )
+    except Exception as exc:
+        logger.warning("tracing trace '%s' failed to start: %s", name, exc)
+        yield _NOOP
+        return
+    with attr_cm, span_cm as handle:
+        yield handle
+
+
+@contextmanager
 def span(name: str, *, input: Any = None, metadata: dict | None = None) -> Iterator[Any]:
     """Nested span. No-op (yields a dummy with .update()) when tracing is off.
 
@@ -53,7 +89,9 @@ def span(name: str, *, input: Any = None, metadata: dict | None = None) -> Itera
         yield _NOOP
         return
     try:
-        cm = client.start_as_current_span(name=name, input=input, metadata=metadata)
+        cm = client.start_as_current_observation(
+            name=name, as_type="span", input=input, metadata=metadata
+        )
     except Exception as exc:
         logger.warning("tracing span '%s' failed to start: %s", name, exc)
         yield _NOOP
@@ -66,14 +104,14 @@ def span(name: str, *, input: Any = None, metadata: dict | None = None) -> Itera
 def generation(
     name: str, *, model: str, input: Any = None, metadata: dict | None = None
 ) -> Iterator[Any]:
-    """LLM generation span. No-op when tracing is off."""
+    """LLM generation span (records model + token usage via handle.update). No-op when off."""
     client = _client()
     if client is None:
         yield _NOOP
         return
     try:
-        cm = client.start_as_current_generation(
-            name=name, model=model, input=input, metadata=metadata
+        cm = client.start_as_current_observation(
+            name=name, as_type="generation", model=model, input=input, metadata=metadata
         )
     except Exception as exc:
         logger.warning("tracing generation '%s' failed to start: %s", name, exc)
@@ -83,18 +121,8 @@ def generation(
         yield handle
 
 
-def update_trace(**kwargs: Any) -> None:
-    """Set trace-level attributes (e.g. session_id, user_id, tags, output)."""
-    client = _client()
-    if client is None:
-        return
-    try:
-        client.update_current_trace(**kwargs)
-    except Exception as exc:
-        logger.warning("tracing update_trace failed: %s", exc)
-
-
 def flush() -> None:
+    """Flush buffered traces (call on shutdown; safe no-op when disabled)."""
     client = _client()
     if client is None:
         return
