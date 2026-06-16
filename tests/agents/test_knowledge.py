@@ -303,7 +303,7 @@ async def test_diagnostic_match_injects_op_passage_and_forces_compose():
     captured: dict = {}
 
     def fake_complete(**kwargs):
-        if kwargs["system"] is DIAGNOSTIC_PROMPT:          # _diagnose
+        if kwargs["system"] == DIAGNOSTIC_PROMPT:          # _diagnose
             return '{"rule_id": "missing_master_data"}'
         captured["content"] = kwargs["messages"][0]["content"]  # _compose
         return "Hãy kiểm tra master data trước khi thao tác."
@@ -323,7 +323,7 @@ async def test_no_diagnostic_match_leaves_pipeline_unchanged():
     ctx.rag.search.return_value = {"passages": [], "citations": [], "top_confidence": 0.0}
 
     def fake_complete(**kwargs):
-        if kwargs["system"] is DIAGNOSTIC_PROMPT:
+        if kwargs["system"] == DIAGNOSTIC_PROMPT:
             return '{"rule_id": "none"}'
         return "[[no_answer]]"
 
