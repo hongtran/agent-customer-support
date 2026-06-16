@@ -1,5 +1,7 @@
 from agent_customer_support.agents.diagnostics import (
-    DIAGNOSTIC_RULES, RULES_BY_ID, DiagnosticRule,
+    DIAGNOSTIC_RULES,
+    RULES_BY_ID,
+    DiagnosticRule,
 )
 
 

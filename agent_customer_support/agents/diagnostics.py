@@ -8,6 +8,7 @@ class DiagnosticRule:
     `symptom` is a natural-language description shown to the classifier; `guidance`
     is the canonical Vietnamese answer text injected into composition on a match.
     """
+
     id: str
     symptom: str
     guidance: str
