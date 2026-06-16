@@ -18,6 +18,7 @@ def test_prompts_are_nonempty_strings():
         KNOWLEDGE_GRADER_PROMPT,
         KNOWLEDGE_REFORMULATE_PROMPT,
         KNOWLEDGE_COMPOSE_PROMPT,
+        DIAGNOSTIC_PROMPT,
     ):
         assert isinstance(p, str) and len(p) > 20
 
