@@ -16,7 +16,11 @@ def test_rules_have_unique_nonempty_fields():
 def test_rules_by_id_roundtrip():
     for r in DIAGNOSTIC_RULES:
         assert RULES_BY_ID[r.id] is r
-    # the two confirmed core examples must exist
+    # the three core rules must exist
     assert "missing_master_data" in RULES_BY_ID
     assert "no_permission" in RULES_BY_ID
     assert "ui_not_configured" in RULES_BY_ID
+    # the three workflow-specific rules sourced from the ops guide
+    assert "forgot_lay_mau_button" in RULES_BY_ID
+    assert "nghiem_thu_blocked" in RULES_BY_ID
+    assert "edit_after_handoff" in RULES_BY_ID
