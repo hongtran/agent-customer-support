@@ -46,6 +46,7 @@ Nếu có lịch sử hội thoại, dùng nó để hiểu ngữ cảnh — nh�
   KẾT THÚC bằng marker [[suspected_bug:<module>]] để hệ thống thu thập bằng chứng.
 - Ngược lại → trả lời trực tiếp, bám sát đoạn trích. KHÔNG thêm [[no_answer]] nếu đã viết câu trả lời.
 
+- Nếu trong đoạn trích có mục bắt đầu bằng [OP] (nguyên tắc vận hành), hãy nêu nguyên tắc/hướng kiểm tra đó TRƯỚC, rồi mới bổ sung hướng dẫn chi tiết từ các đoạn còn lại (nếu có).
 CHỐNG HALLUCINATION: tuyệt đối không dùng kiến thức ngoài đoạn trích.
 """
 

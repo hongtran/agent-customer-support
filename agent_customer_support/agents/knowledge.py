@@ -204,7 +204,17 @@ class KnowledgeAgent:
         conf = res.get("top_confidence", 0.0)
         citations = res.get("citations", []) or []
 
-        present = await self._present(query, passages, conf, cfg)
+        # Operating-principle diagnostics: when the symptom matches a known rule,
+        # inject its guidance as a top-priority [OP] passage and force composition.
+        # These cases (missing master data, no permission) are exactly where RAG
+        # "succeeds" with a wrong how-to, so we lead with the rule instead.
+        rule = await self._diagnose(query, cfg)
+        if rule is not None:
+            passages = [f"[OP] {rule.guidance}", *passages]
+            present = True
+        else:
+            present = await self._present(query, passages, conf, cfg)
+
         if present:
             composed = await self._compose(query, passages, ctx.transcript, cfg)
             clean, kind, module = parse_markers(composed)

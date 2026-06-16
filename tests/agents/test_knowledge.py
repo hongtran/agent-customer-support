@@ -6,6 +6,7 @@ from agent_customer_support.agents.knowledge import (
     needs_grading,
 )
 from agent_customer_support.agents.context import TurnContext
+from agent_customer_support.agents.prompts import DIAGNOSTIC_PROMPT
 from agent_customer_support.config import get_settings
 from agent_customer_support.models import CustomerProfile, SessionState, Conversation
 
@@ -293,3 +294,43 @@ async def test_diagnose_failclosed_on_unknown_id():
                return_value='{"rule_id": "made_up_rule"}'):
         rule = await KnowledgeAgent()._diagnose("bất kỳ", get_settings())
     assert rule is None
+
+
+async def test_diagnostic_match_injects_op_passage_and_forces_compose():
+    """A matched rule leads the answer even when RAG returns nothing."""
+    ctx = _ctx("tôi không thấy dữ liệu khách hàng")
+    ctx.rag.search.return_value = {"passages": [], "citations": [], "top_confidence": 0.0}
+    captured: dict = {}
+
+    def fake_complete(**kwargs):
+        if kwargs["system"] is DIAGNOSTIC_PROMPT:          # _diagnose
+            return '{"rule_id": "missing_master_data"}'
+        captured["content"] = kwargs["messages"][0]["content"]  # _compose
+        return "Hãy kiểm tra master data trước khi thao tác."
+
+    with patch("agent_customer_support.agents.knowledge.complete_text",
+               side_effect=fake_complete):
+        res = await KnowledgeAgent().run(ctx)
+
+    assert res.resolved is True                    # present forced True despite empty RAG
+    assert "[OP]" in captured["content"]           # rule injected as a passage
+    assert "master data" in captured["content"]    # the rule's guidance reached compose
+
+
+async def test_no_diagnostic_match_leaves_pipeline_unchanged():
+    """No rule match → existing first-miss clarify behavior is preserved."""
+    ctx = _ctx("hỏi linh tinh không liên quan")
+    ctx.rag.search.return_value = {"passages": [], "citations": [], "top_confidence": 0.0}
+
+    def fake_complete(**kwargs):
+        if kwargs["system"] is DIAGNOSTIC_PROMPT:
+            return '{"rule_id": "none"}'
+        return "[[no_answer]]"
+
+    with patch("agent_customer_support.agents.knowledge.complete_text",
+               side_effect=fake_complete):
+        res = await KnowledgeAgent().run(ctx)
+
+    assert res.resolved is None
+    assert ctx.session.pending == "knowledge_clarify"
+    ctx.backlog.add.assert_not_awaited()
