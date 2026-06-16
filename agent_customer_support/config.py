@@ -9,6 +9,18 @@ class Settings(BaseSettings):
     product_collection: str = "cenlab"
     agent_model: str = "gpt-4o-mini"
 
+    # Per-agent model overrides — default to agent_model if unset
+    triage_model: str | None = "gpt-4o-mini"
+    knowledge_model: str | None = "gpt-4o"
+    knowledge_grader_model: str | None = "gpt-4o-mini"
+    knowledge_contextualize_model: str | None = "gpt-4o-mini"
+    verification_model: str | None = "gpt-4o-mini"
+    flow_model: str | None = "gpt-4o-mini"
+    diagnostic_model: str | None = "gpt-4o-mini"
+
+    def model_for(self, agent: str) -> str:
+        return getattr(self, f"{agent}_model", None) or self.agent_model
+
     dynamodb_endpoint_url: str | None = None
     aws_region: str = "ap-southeast-1"
 
