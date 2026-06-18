@@ -143,6 +143,82 @@ async def test_suspected_bug_marker_sets_flag():
     assert "[[suspected_bug" not in res.reply
 
 
+@pytest.mark.parametrize(
+    "message, clarify_reply",
+    [
+        # ambiguous subject
+        (
+            "cách tạo phiếu?",
+            "Bạn muốn tạo loại phiếu nào?\n- Báo giá\n- PYC\n- Phiếu kết quả [[clarify]]",
+        ),
+        # missing decisive parameter / unknown user-state
+        (
+            "PQT trả đơn về thì KD sửa số lượng mẫu được không?",
+            "Đơn của bạn đang ở trạng thái nào?\n- Còn trong ứng dụng\n"
+            "- Đã chuyển chưa tiếp nhận\n- Đã tiếp nhận ở ứng dụng khác [[clarify]]",
+        ),
+        # unverified premise
+        (
+            "sau khi huỷ PYC thì hoàn tiền thế nào?",
+            "Bạn đã thực sự huỷ PYC chưa, hay đang cân nhắc? [[clarify]]",
+        ),
+    ],
+)
+async def test_clarify_asks_once_and_sets_pending(message, clarify_reply):
+    ctx = _ctx(message)
+    ctx.rag.search.return_value = {"passages": [], "citations": ["c#1"]}
+    with patch(
+        "agent_customer_support.agents.knowledge.complete_text", return_value=clarify_reply
+    ):
+        res = await KnowledgeAgent().run(ctx)
+    assert res.resolved is None  # neither answered nor escalated
+    assert ctx.session.pending == "knowledge_clarify"
+    assert "[[clarify]]" not in res.reply
+    ctx.backlog.add.assert_not_awaited()  # clarify is not a miss
+
+
+async def test_resume_turn_disables_clarify_and_grounds_answer():
+    """On resume, compose is called with allow_clarify=False; a grounded answer returns."""
+    ctx = _ctx("đơn đang còn trong ứng dụng")
+    ctx.session.pending = "knowledge_clarify"  # we clarified last turn
+    ctx.rag.search.return_value = {"passages": ["p" * 200], "citations": []}
+    seen: dict = {}
+
+    def fake_complete(**kwargs):
+        content = kwargs["messages"][0]["content"]
+        if "Đoạn trích" in content:  # the compose call
+            seen["compose_content"] = content
+            return "Vì đơn còn trong ứng dụng, bạn trả về tài khoản đã tạo để sửa."
+        return kwargs["messages"][0]["content"]  # contextualize passthrough
+
+    with patch(
+        "agent_customer_support.agents.knowledge.complete_text", side_effect=fake_complete
+    ):
+        res = await KnowledgeAgent().run(ctx)
+
+    from agent_customer_support.agents.prompts import KNOWLEDGE_RESUME_NO_CLARIFY
+
+    assert res.resolved is True
+    assert ctx.session.pending is None  # flag consumed
+    assert KNOWLEDGE_RESUME_NO_CLARIFY in seen["compose_content"]  # clarify suppressed
+    ctx.backlog.add.assert_not_awaited()
+
+
+async def test_clarify_marker_on_resume_is_downgraded_to_answer():
+    """Defensive: if the model disobeys and re-emits [[clarify]] on resume, answer anyway."""
+    ctx = _ctx("vẫn chưa rõ")
+    ctx.session.pending = "knowledge_clarify"
+    ctx.rag.search.return_value = {"passages": [], "citations": []}
+    with patch(
+        "agent_customer_support.agents.knowledge.complete_text",
+        return_value="Giả định đơn còn trong ứng dụng: bạn sửa trực tiếp. [[clarify]]",
+    ):
+        res = await KnowledgeAgent().run(ctx)
+    assert res.resolved is True  # not a second clarify
+    assert ctx.session.pending is None
+    assert "[[clarify]]" not in res.reply
+
+
 # ---- contextualize ----
 
 

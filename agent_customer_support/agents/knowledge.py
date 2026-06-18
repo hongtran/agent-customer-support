@@ -148,7 +148,9 @@ class KnowledgeAgent:
         # with no retrieved passages the model can answer process-level questions.
         # The [[no_answer]] marker is the single miss signal — emitted only when
         # neither the process nor the passages can answer.
-        composed = await self._compose(query, passages, ctx.transcript, cfg)
+        composed = await self._compose(
+            query, passages, ctx.transcript, cfg, allow_clarify=not already_clarified
+        )
         clean, kind, application = parse_markers(composed)
 
         if kind == "suspected_bug":
@@ -159,6 +161,18 @@ class KnowledgeAgent:
                 evidence={"application": application, "summary": ctx.message},
                 citations=citations,
             )
+
+        # Clarify / confirm before answering. The composer judged that an element it
+        # can't see (ambiguous subject, unknown user-state, unverified premise, or a
+        # risky intent) materially changes the answer. Ask once — bounded by the same
+        # knowledge_clarify flag — then re-ground on the user's reply next turn.
+        # allow_clarify=False on the resume turn means compose should never reach here
+        # twice; if the model disobeys, downgrade to a plain (assumption-stated) answer.
+        if kind == "clarify":
+            if not already_clarified:
+                ctx.session.pending = "knowledge_clarify"
+                return AgentResult(reply=clean, resolved=None, citations=citations)
+            return AgentResult(reply=clean, resolved=True, citations=citations)
 
         if kind != "no_answer":
             return AgentResult(reply=clean, resolved=True, citations=citations)
