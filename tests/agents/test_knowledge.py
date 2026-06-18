@@ -167,9 +167,7 @@ async def test_suspected_bug_marker_sets_flag():
 async def test_clarify_asks_once_and_sets_pending(message, clarify_reply):
     ctx = _ctx(message)
     ctx.rag.search.return_value = {"passages": [], "citations": ["c#1"]}
-    with patch(
-        "agent_customer_support.agents.knowledge.complete_text", return_value=clarify_reply
-    ):
+    with patch("agent_customer_support.agents.knowledge.complete_text", return_value=clarify_reply):
         res = await KnowledgeAgent().run(ctx)
     assert res.resolved is None  # neither answered nor escalated
     assert ctx.session.pending == "knowledge_clarify"
@@ -191,9 +189,7 @@ async def test_resume_turn_disables_clarify_and_grounds_answer():
             return "Vì đơn còn trong ứng dụng, bạn trả về tài khoản đã tạo để sửa."
         return kwargs["messages"][0]["content"]  # contextualize passthrough
 
-    with patch(
-        "agent_customer_support.agents.knowledge.complete_text", side_effect=fake_complete
-    ):
+    with patch("agent_customer_support.agents.knowledge.complete_text", side_effect=fake_complete):
         res = await KnowledgeAgent().run(ctx)
 
     from agent_customer_support.agents.prompts import KNOWLEDGE_RESUME_NO_CLARIFY

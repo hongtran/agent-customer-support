@@ -140,7 +140,9 @@ class KnowledgeAgent:
         query = await self._contextualize(ctx, cfg)
 
         applications = ctx.session.selected_applications or None
-        res = await ctx.rag.search(query, collection=cfg.product_collection, applications=applications)
+        res = await ctx.rag.search(
+            query, collection=cfg.product_collection, applications=applications
+        )
         passages = res.get("passages", []) or []
         citations = res.get("citations", []) or []
 
