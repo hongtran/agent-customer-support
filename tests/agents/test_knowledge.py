@@ -58,6 +58,21 @@ def test_parse_markers_bug_beats_clarify():
     assert kind == "suspected_bug" and mod == "xn"
 
 
+def test_compose_prompt_documents_clarify_and_diagnose_policy():
+    from agent_customer_support.agents.prompts import (
+        KNOWLEDGE_COMPOSE_PROMPT,
+        KNOWLEDGE_RESUME_NO_CLARIFY,
+    )
+
+    # The clarify/confirm contract must be in the compose system prompt...
+    assert "[[clarify]]" in KNOWLEDGE_COMPOSE_PROMPT
+    # ...the diagnose (process-conformance) contract too...
+    assert "sai quy trình" in KNOWLEDGE_COMPOSE_PROMPT
+    # ...and the resume suppressor must forbid re-clarifying.
+    assert "[[clarify]]" in KNOWLEDGE_RESUME_NO_CLARIFY
+    assert "KHÔNG" in KNOWLEDGE_RESUME_NO_CLARIFY
+
+
 # ---- pipeline branches ----
 
 
