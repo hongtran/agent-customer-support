@@ -3,10 +3,8 @@ from unittest.mock import patch, AsyncMock, ANY
 from agent_customer_support.agents.knowledge import (
     KnowledgeAgent,
     parse_markers,
-    needs_grading,
 )
 from agent_customer_support.agents.context import TurnContext
-from agent_customer_support.agents.prompts import DIAGNOSTIC_PROMPT
 from agent_customer_support.config import get_settings
 from agent_customer_support.models import CustomerProfile, SessionState, Conversation
 
@@ -29,26 +27,6 @@ def _ctx(message="cách tạo phiếu?") -> TurnContext:
 # ---- pure helpers ----
 
 
-def test_needs_grading_medium_band_true():
-    assert needs_grading(0.70, ["a" * 500]) is True
-
-
-def test_needs_grading_high_long_passages_false():
-    assert needs_grading(0.88, ["a" * 500]) is False
-
-
-def test_needs_grading_high_but_short_passages_true():
-    assert needs_grading(0.88, ["short"]) is True
-
-
-def test_needs_grading_no_passages_false():
-    assert needs_grading(0.70, []) is False
-
-
-def test_needs_grading_low_false():
-    assert needs_grading(0.30, ["a" * 500]) is False
-
-
 def test_parse_markers_no_answer():
     clean, kind, mod = parse_markers("Không rõ. [[no_answer]]")
     assert kind == "no_answer" and "[[no_answer]]" not in clean
@@ -64,55 +42,54 @@ def test_parse_markers_plain_answer():
     assert kind is None and mod is None and clean == "Vào menu X."
 
 
+def test_parse_markers_clarify():
+    clean, kind, mod = parse_markers(
+        "Bạn đang muốn tạo loại phiếu nào?\n- Báo giá\n- PYC\n- Phiếu kết quả [[clarify]]"
+    )
+    assert kind == "clarify"
+    assert mod is None
+    assert "[[clarify]]" not in clean
+    assert "Báo giá" in clean  # grounded options survive
+
+
+def test_parse_markers_bug_beats_clarify():
+    # If the model emits both, suspected_bug wins (safe handoff path).
+    clean, kind, mod = parse_markers("Đáng lẽ chạy. [[clarify]] [[suspected_bug:xn]]")
+    assert kind == "suspected_bug" and mod == "xn"
+
+
 # ---- pipeline branches ----
 
 
-async def test_high_confidence_composes_answer():
+async def test_composes_answer_from_passages():
     ctx = _ctx()
-    ctx.rag.search.return_value = {
-        "passages": ["x" * 500],
-        "citations": ["c#1"],
-        "top_confidence": 0.9,
-    }
+    ctx.rag.search.return_value = {"passages": ["x" * 500], "citations": ["c#1"]}
     with patch(
         "agent_customer_support.agents.knowledge.complete_text", return_value="Vào menu X rồi tạo."
     ):
         res = await KnowledgeAgent().run(ctx)
     assert res.resolved is True
     assert "menu X" in res.reply
-    ctx.rag.search.assert_awaited_once()  # no reformulation needed
+    ctx.rag.search.assert_awaited_once()
 
 
-async def test_medium_band_grader_present_then_answer():
-    ctx = _ctx("thuật ngữ riêng của cty")
-    ctx.rag.search.return_value = {
-        "passages": ["p" * 500],
-        "citations": [],
-        "top_confidence": 0.70,
-    }
-    with (
-        patch(
-            "agent_customer_support.agents.knowledge.KnowledgeAgent._grade",
-            new=AsyncMock(return_value=True),
-        ),
-        patch(
-            "agent_customer_support.agents.knowledge.complete_text",
-            return_value="Trong phần mềm gọi là Y, làm thế này.",
-        ),
-    ):
+async def test_always_composes_even_with_empty_passages():
+    """Process is always-on, so a process-level question is answerable with no RAG hits."""
+    ctx = _ctx("ai phụ trách bước nghiệm thu?")
+    ctx.rag.search.return_value = {"passages": [], "citations": []}
+    with patch(
+        "agent_customer_support.agents.knowledge.complete_text",
+        return_value="Nghiệm thu hợp đồng do Kế toán và Kinh doanh phụ trách.",
+    ) as mock_llm:
         res = await KnowledgeAgent().run(ctx)
     assert res.resolved is True
-    assert "Y" in res.reply
+    mock_llm.assert_called_once()  # compose runs even with no passages
 
 
 async def test_first_no_answer_clarifies_and_sets_pending():
     """First miss asks one clarifying question instead of logging/escalating."""
     ctx = _ctx("hỏi linh tinh")
-    ctx.rag.search.return_value = {
-        "passages": ["p" * 500],
-        "citations": [],
-        "top_confidence": 0.90,
-    }
+    ctx.rag.search.return_value = {"passages": [], "citations": []}
     with patch(
         "agent_customer_support.agents.knowledge.complete_text", return_value="[[no_answer]]"
     ):
@@ -126,12 +103,7 @@ async def test_second_no_answer_logs_to_backlog():
     """Second miss (the clarification turn) gives up: log to backlog, clear pending."""
     ctx = _ctx("hỏi linh tinh")
     ctx.session.pending = "knowledge_clarify"  # we already clarified once
-    ctx.rag.search.return_value = {
-        "passages": ["p" * 500],
-        "citations": [],
-        "top_confidence": 0.90,
-    }
-    # compose returns bare [[no_answer]] (no substantial content) -> log to backlog
+    ctx.rag.search.return_value = {"passages": [], "citations": []}
     with patch(
         "agent_customer_support.agents.knowledge.complete_text", return_value="[[no_answer]]"
     ):
@@ -145,18 +117,14 @@ async def test_second_no_answer_logs_to_backlog():
 
 async def test_suspected_bug_marker_sets_flag():
     ctx = _ctx("tính năng A bị lỗi")
-    ctx.rag.search.return_value = {
-        "passages": ["p" * 500],
-        "citations": [],
-        "top_confidence": 0.90,
-    }
+    ctx.rag.search.return_value = {"passages": ["p" * 500], "citations": []}
     with patch(
         "agent_customer_support.agents.knowledge.complete_text",
         return_value="Đáng lẽ chạy. [[suspected_bug:xet-nghiem]]",
     ):
         res = await KnowledgeAgent().run(ctx)
     assert res.suspected_bug is True
-    assert res.evidence["module"] == "xet-nghiem"
+    assert res.evidence["application"] == "xet-nghiem"
     assert "[[suspected_bug" not in res.reply
 
 
@@ -198,11 +166,7 @@ async def test_run_uses_contextualized_query_for_search():
         "assistant: Vào menu Mẫu XN, nhấn Thêm.\n"
         "user: xoá nó thì sao?"
     )
-    ctx.rag.search.return_value = {
-        "passages": ["x" * 500],
-        "citations": [],
-        "top_confidence": 0.9,
-    }
+    ctx.rag.search.return_value = {"passages": ["x" * 500], "citations": []}
     standalone = "Cách xoá mẫu xét nghiệm trong CenLab?"
     call_log: list[str] = []
 
@@ -221,7 +185,7 @@ async def test_run_uses_contextualized_query_for_search():
         res = await KnowledgeAgent().run(ctx)
 
     assert res.resolved is True
-    ctx.rag.search.assert_awaited_once_with(standalone, collection=ANY)
+    ctx.rag.search.assert_awaited_once_with(standalone, collection=ANY, applications=None)
     assert standalone in call_log[0]  # compose received the standalone question
 
 
@@ -265,72 +229,19 @@ async def test_compose_omits_history_on_first_turn():
     assert "Lịch sử hội thoại" not in captured["content"]
 
 
-# ---- diagnose ----
+async def test_compose_passes_process_block_as_cached_system_prefix():
+    """The always-on process context must be the first (cacheable) system block."""
+    from agent_customer_support.agents.prompts import PROCESS_BLOCK
 
-
-async def test_diagnose_matches_known_symptom():
-    with patch("agent_customer_support.agents.knowledge.complete_text",
-               return_value='{"rule_id": "no_permission"}'):
-        rule = await KnowledgeAgent()._diagnose("tôi không có quyền vào menu này", get_settings())
-    assert rule is not None and rule.id == "no_permission"
-
-
-async def test_diagnose_returns_none_when_no_match():
-    with patch("agent_customer_support.agents.knowledge.complete_text",
-               return_value='{"rule_id": "none"}'):
-        rule = await KnowledgeAgent()._diagnose("cách tạo phiếu yêu cầu?", get_settings())
-    assert rule is None
-
-
-async def test_diagnose_failclosed_on_malformed_json():
-    with patch("agent_customer_support.agents.knowledge.complete_text",
-               return_value="xin lỗi tôi không biết"):
-        rule = await KnowledgeAgent()._diagnose("bất kỳ", get_settings())
-    assert rule is None
-
-
-async def test_diagnose_failclosed_on_unknown_id():
-    with patch("agent_customer_support.agents.knowledge.complete_text",
-               return_value='{"rule_id": "made_up_rule"}'):
-        rule = await KnowledgeAgent()._diagnose("bất kỳ", get_settings())
-    assert rule is None
-
-
-async def test_diagnostic_match_injects_op_passage_and_forces_compose():
-    """A matched rule leads the answer even when RAG returns nothing."""
-    ctx = _ctx("tôi không thấy dữ liệu khách hàng")
-    ctx.rag.search.return_value = {"passages": [], "citations": [], "top_confidence": 0.0}
+    agent = KnowledgeAgent()
     captured: dict = {}
 
-    def fake_complete(**kwargs):
-        if kwargs["system"] == DIAGNOSTIC_PROMPT:          # _diagnose
-            return '{"rule_id": "missing_master_data"}'
-        captured["content"] = kwargs["messages"][0]["content"]  # _compose
-        return "Hãy kiểm tra master data trước khi thao tác."
+    def fake_complete(*, messages, system, model=None):
+        captured["system"] = system
+        return "ok"
 
-    with patch("agent_customer_support.agents.knowledge.complete_text",
-               side_effect=fake_complete):
-        res = await KnowledgeAgent().run(ctx)
+    with patch("agent_customer_support.agents.knowledge.complete_text", side_effect=fake_complete):
+        await agent._compose("q", ["p"], "user: q", get_settings())
 
-    assert res.resolved is True                    # present forced True despite empty RAG
-    assert "[OP]" in captured["content"]           # rule injected as a passage
-    assert "master data" in captured["content"]    # the rule's guidance reached compose
-
-
-async def test_no_diagnostic_match_leaves_pipeline_unchanged():
-    """No rule match → existing first-miss clarify behavior is preserved."""
-    ctx = _ctx("hỏi linh tinh không liên quan")
-    ctx.rag.search.return_value = {"passages": [], "citations": [], "top_confidence": 0.0}
-
-    def fake_complete(**kwargs):
-        if kwargs["system"] == DIAGNOSTIC_PROMPT:
-            return '{"rule_id": "none"}'
-        return "[[no_answer]]"
-
-    with patch("agent_customer_support.agents.knowledge.complete_text",
-               side_effect=fake_complete):
-        res = await KnowledgeAgent().run(ctx)
-
-    assert res.resolved is None
-    assert ctx.session.pending == "knowledge_clarify"
-    ctx.backlog.add.assert_not_awaited()
+    assert isinstance(captured["system"], list)
+    assert captured["system"][0] is PROCESS_BLOCK

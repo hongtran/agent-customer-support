@@ -1,18 +1,11 @@
-import json
 import re
 
 from agent_customer_support.agents.context import TurnContext
 from agent_customer_support.agents.prompts import (
     KNOWLEDGE_CONTEXTUALIZE_PROMPT,
     KNOWLEDGE_CONTEXTUALIZE_VISION_PROMPT,
-    KNOWLEDGE_GRADER_PROMPT,
     KNOWLEDGE_COMPOSE_PROMPT,
-    DIAGNOSTIC_PROMPT,
-)
-from agent_customer_support.agents.diagnostics import (
-    DIAGNOSTIC_RULES,
-    RULES_BY_ID,
-    DiagnosticRule,
+    PROCESS_BLOCK,
 )
 from agent_customer_support.config import Settings, get_settings
 from agent_customer_support.llm import complete_text
@@ -24,30 +17,23 @@ from agent_customer_support.models import AgentResult
 
 _NO_ANSWER_RE = re.compile(r"\[\[no_answer\]\]")
 _BUG_RE = re.compile(r"\[\[suspected_bug:([a-zA-Z0-9_\-]+)\]\]")
-
-HIGH = 0.70
-LOW = 0.50
-MIN_SUBSTANTIAL_CHARS = 200  # high score but shorter than this => grade
-
-
-def needs_grading(top_confidence: float, passages: list[str]) -> bool:
-    """Return True if the LLM grader should be consulted to confirm answer presence."""
-    if not passages:
-        return False
-    if LOW <= top_confidence < HIGH:
-        return True
-    if top_confidence >= HIGH:
-        total = sum(len(p) for p in passages)
-        return total < MIN_SUBSTANTIAL_CHARS
-    return False  # low score: skip grader, reformulate instead
+_CLARIFY_RE = re.compile(r"\[\[clarify\]\]")
 
 
 def parse_markers(text: str) -> tuple[str, str | None, str | None]:
-    """Return (clean_text, kind, module) where kind in {None, 'no_answer', 'suspected_bug'}."""
+    """Return (clean_text, kind, application) where kind in
+    {None, 'no_answer', 'suspected_bug', 'clarify'}.
+
+    Precedence: suspected_bug > clarify > no_answer. A bug is the safest handoff,
+    so it wins if the model emits more than one marker.
+    """
     bug = _BUG_RE.search(text or "")
     if bug:
         clean = _BUG_RE.sub("", text).strip()
         return clean, "suspected_bug", bug.group(1)
+    if _CLARIFY_RE.search(text or ""):
+        clean = _CLARIFY_RE.sub("", text).strip()
+        return clean, "clarify", None
     if _NO_ANSWER_RE.search(text or ""):
         clean = _NO_ANSWER_RE.sub("", text).strip()
         # If the model wrote substantial content AND appended [[no_answer]], the marker
@@ -102,57 +88,15 @@ class KnowledgeAgent:
         )
         return (raw or ctx.message).strip()
 
-    async def _grade(self, question: str, passages: list[str], cfg: Settings) -> bool:
-        """Ask the LLM grader whether the passages actually answer the question."""
-        raw = complete_text(
-            messages=[
-                {
-                    "role": "user",
-                    "content": f"CÂU HỎI: {question}\n\nĐOẠN TRÍCH:\n{_passages_block(passages)}",
-                }
-            ],
-            system=KNOWLEDGE_GRADER_PROMPT,
-            model=cfg.model_for("knowledge_grader"),
-        )
-        try:
-            return bool(json.loads(raw).get("answer_present"))
-        except (json.JSONDecodeError, TypeError):
-            return False  # fail-closed: don't answer if grader is unparseable
-
-    async def _diagnose(self, query: str, cfg: Settings) -> DiagnosticRule | None:
-        """Classify the query against known operating-principle symptoms.
-
-        Returns the matched DiagnosticRule, or None when nothing matches or the
-        classifier output is unusable. Fail-closed by design: a diagnostic failure
-        must never block an answer the pipeline would otherwise produce.
-        """
-        rules_block = "\n".join(f"{r.id}: {r.symptom}" for r in DIAGNOSTIC_RULES)
-        raw = complete_text(
-            messages=[
-                {
-                    "role": "user",
-                    "content": f"DANH SÁCH QUY TẮC:\n{rules_block}\n\nCÂU HỎI: {query}",
-                }
-            ],
-            system=DIAGNOSTIC_PROMPT,
-            model=cfg.model_for("diagnostic"),
-        )
-        try:
-            rule_id = json.loads(raw).get("rule_id")
-        except (json.JSONDecodeError, TypeError, AttributeError):
-            return None
-        if not rule_id or rule_id == "none":
-            return None
-        return RULES_BY_ID.get(rule_id)  # unknown id -> None
-
     async def _compose(
         self, question: str, passages: list[str], transcript: str, cfg: Settings
     ) -> str:
-        """Compose a grounded answer from passages, with optional conversation history.
+        """Compose a grounded answer from the always-on process + retrieved passages.
 
-        Passes the transcript as context so the model can resolve remaining ambiguity
-        in phrasing and avoid repeating information already given — but content must
-        still come only from passages (enforced by KNOWLEDGE_COMPOSE_PROMPT).
+        The process context is injected as a cached system prefix (PROCESS_BLOCK);
+        passages carry the per-module detail and may be empty. Transcript is passed
+        for context so the model can resolve remaining ambiguity in phrasing — but
+        content must still come only from the two sources (enforced by the prompt).
         """
         if _HAS_PRIOR_TURN in transcript:
             history = f"Lịch sử hội thoại:\n{transcript}\n\n"
@@ -163,27 +107,16 @@ class KnowledgeAgent:
         )
         return complete_text(
             messages=[{"role": "user", "content": content}],
-            system=KNOWLEDGE_COMPOSE_PROMPT,
+            system=[PROCESS_BLOCK, {"type": "text", "text": KNOWLEDGE_COMPOSE_PROMPT}],
             model=cfg.model_for("knowledge"),
         )
-
-    async def _present(
-        self, question: str, passages: list[str], conf: float, cfg: Settings
-    ) -> bool:
-        """Determine whether the passages are present/relevant enough to attempt composing."""
-        # return True
-        if not passages:
-            return False
-        if needs_grading(conf, passages):
-            return await self._grade(question, passages, cfg)
-        return conf >= HIGH  # trust high, distrust low
 
     async def run(self, ctx: TurnContext) -> AgentResult:
         """
         Single-attempt pipeline:
-          contextualize → search → check presence → compose → return result
+          contextualize → search → compose (process always-on) → return result
 
-        On a miss (no relevant passages, or compose emits [[no_answer]]):
+        On a miss (compose emits [[no_answer]] — neither process nor passages answer):
           - first miss → ask ONE clarifying question (and invite a screenshot), so the
             user can pin down a vague or jargon-y request; state kept in
             session.pending = "knowledge_clarify" to bound this to a single attempt
@@ -198,38 +131,29 @@ class KnowledgeAgent:
             ctx.session.pending = None
         query = await self._contextualize(ctx, cfg)
 
-        modules = ctx.session.selected_modules or None
-        res = await ctx.rag.search(query, collection=cfg.product_collection, modules=modules)
+        applications = ctx.session.selected_applications or None
+        res = await ctx.rag.search(query, collection=cfg.product_collection, applications=applications)
         passages = res.get("passages", []) or []
-        conf = res.get("top_confidence", 0.0)
         citations = res.get("citations", []) or []
 
-        # Operating-principle diagnostics: when the symptom matches a known rule,
-        # inject its guidance as a top-priority [OP] passage and force composition.
-        # These cases (missing master data, no permission) are exactly where RAG
-        # "succeeds" with a wrong how-to, so we lead with the rule instead.
-        rule = await self._diagnose(query, cfg)
-        if rule is not None:
-            passages = [f"[OP] {rule.guidance}", *passages]
-            present = True
-        else:
-            present = await self._present(query, passages, conf, cfg)
+        # Always compose: the process context is always in the system prefix, so even
+        # with no retrieved passages the model can answer process-level questions.
+        # The [[no_answer]] marker is the single miss signal — emitted only when
+        # neither the process nor the passages can answer.
+        composed = await self._compose(query, passages, ctx.transcript, cfg)
+        clean, kind, application = parse_markers(composed)
 
-        if present:
-            composed = await self._compose(query, passages, ctx.transcript, cfg)
-            clean, kind, module = parse_markers(composed)
+        if kind == "suspected_bug":
+            return AgentResult(
+                reply=clean,
+                resolved=False,
+                suspected_bug=True,
+                evidence={"application": application, "summary": ctx.message},
+                citations=citations,
+            )
 
-            if kind == "suspected_bug":
-                return AgentResult(
-                    reply=clean,
-                    resolved=False,
-                    suspected_bug=True,
-                    evidence={"module": module, "summary": ctx.message},
-                    citations=citations,
-                )
-
-            if kind != "no_answer":
-                return AgentResult(reply=clean, resolved=True, citations=citations)
+        if kind != "no_answer":
+            return AgentResult(reply=clean, resolved=True, citations=citations)
 
         # Miss. On the first one, try to disambiguate before giving up to a human:
         # the request may just be vague or use the customer's own terminology.
@@ -248,7 +172,7 @@ class KnowledgeAgent:
             customer_id=ctx.customer.customer_id,
             type="how_to_missing",
             summary=ctx.message,
-            module=None,
+            application=None,
             transcript=ctx.transcript,
         )
         return AgentResult(
