@@ -58,6 +58,15 @@ def test_parse_markers_bug_beats_clarify():
     assert kind == "suspected_bug" and mod == "xn"
 
 
+def test_parse_markers_strips_stray_second_marker():
+    # Model misbehaves and emits two markers; precedence picks clarify, but the
+    # stray no_answer marker must not leak into the user-facing text.
+    clean, kind, mod = parse_markers("Bạn muốn loại nào? [[no_answer]] [[clarify]]")
+    assert kind == "clarify"
+    assert "[[no_answer]]" not in clean
+    assert "[[clarify]]" not in clean
+
+
 def test_compose_prompt_documents_clarify_and_diagnose_policy():
     from agent_customer_support.agents.prompts import (
         KNOWLEDGE_COMPOSE_PROMPT,

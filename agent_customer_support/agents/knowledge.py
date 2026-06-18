@@ -21,6 +21,18 @@ _BUG_RE = re.compile(r"\[\[suspected_bug:([a-zA-Z0-9_\-]+)\]\]")
 _CLARIFY_RE = re.compile(r"\[\[clarify\]\]")
 
 
+def _scrub_markers(text: str) -> str:
+    """Strip every known marker pattern from text, regardless of kind.
+
+    Guards against the model emitting a stray second marker (e.g. both
+    [[no_answer]] and [[clarify]]): the selected kind drives routing, but no
+    marker should ever leak literally into the user-facing reply.
+    """
+    for pattern in (_BUG_RE, _CLARIFY_RE, _NO_ANSWER_RE):
+        text = pattern.sub("", text)
+    return text.strip()
+
+
 def parse_markers(text: str) -> tuple[str, str | None, str | None]:
     """Return (clean_text, kind, application) where kind in
     {None, 'no_answer', 'suspected_bug', 'clarify'}.
@@ -30,13 +42,11 @@ def parse_markers(text: str) -> tuple[str, str | None, str | None]:
     """
     bug = _BUG_RE.search(text or "")
     if bug:
-        clean = _BUG_RE.sub("", text).strip()
-        return clean, "suspected_bug", bug.group(1)
+        return _scrub_markers(text or ""), "suspected_bug", bug.group(1)
     if _CLARIFY_RE.search(text or ""):
-        clean = _CLARIFY_RE.sub("", text).strip()
-        return clean, "clarify", None
+        return _scrub_markers(text or ""), "clarify", None
     if _NO_ANSWER_RE.search(text or ""):
-        clean = _NO_ANSWER_RE.sub("", text).strip()
+        clean = _scrub_markers(text or "")
         # If the model wrote substantial content AND appended [[no_answer]], the marker
         # is a spurious hedge — trust the content and treat it as a valid answer.
         if len(clean) > 80:
