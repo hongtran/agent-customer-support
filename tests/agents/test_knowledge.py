@@ -244,6 +244,38 @@ async def test_compose_omits_history_on_first_turn():
     assert "Lịch sử hội thoại" not in captured["content"]
 
 
+async def test_compose_appends_no_clarify_directive_when_disabled():
+    from agent_customer_support.agents.prompts import KNOWLEDGE_RESUME_NO_CLARIFY
+
+    agent = KnowledgeAgent()
+    captured: dict = {}
+
+    def fake_complete(*, messages, system, model=None):
+        captured["content"] = messages[0]["content"]
+        return "ok"
+
+    with patch("agent_customer_support.agents.knowledge.complete_text", side_effect=fake_complete):
+        await agent._compose("q", ["p"], "user: q", get_settings(), allow_clarify=False)
+
+    assert KNOWLEDGE_RESUME_NO_CLARIFY in captured["content"]
+
+
+async def test_compose_omits_no_clarify_directive_by_default():
+    from agent_customer_support.agents.prompts import KNOWLEDGE_RESUME_NO_CLARIFY
+
+    agent = KnowledgeAgent()
+    captured: dict = {}
+
+    def fake_complete(*, messages, system, model=None):
+        captured["content"] = messages[0]["content"]
+        return "ok"
+
+    with patch("agent_customer_support.agents.knowledge.complete_text", side_effect=fake_complete):
+        await agent._compose("q", ["p"], "user: q", get_settings())
+
+    assert KNOWLEDGE_RESUME_NO_CLARIFY not in captured["content"]
+
+
 async def test_compose_passes_process_block_as_cached_system_prefix():
     """The always-on process context must be the first (cacheable) system block."""
     from agent_customer_support.agents.prompts import PROCESS_BLOCK

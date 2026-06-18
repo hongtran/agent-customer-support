@@ -5,6 +5,7 @@ from agent_customer_support.agents.prompts import (
     KNOWLEDGE_CONTEXTUALIZE_PROMPT,
     KNOWLEDGE_CONTEXTUALIZE_VISION_PROMPT,
     KNOWLEDGE_COMPOSE_PROMPT,
+    KNOWLEDGE_RESUME_NO_CLARIFY,
     PROCESS_BLOCK,
 )
 from agent_customer_support.config import Settings, get_settings
@@ -89,7 +90,12 @@ class KnowledgeAgent:
         return (raw or ctx.message).strip()
 
     async def _compose(
-        self, question: str, passages: list[str], transcript: str, cfg: Settings
+        self,
+        question: str,
+        passages: list[str],
+        transcript: str,
+        cfg: Settings,
+        allow_clarify: bool = True,
     ) -> str:
         """Compose a grounded answer from the always-on process + retrieved passages.
 
@@ -105,6 +111,8 @@ class KnowledgeAgent:
         content = (
             f"{history}Câu hỏi hiện tại: {question}\n\nĐoạn trích:\n{_passages_block(passages)}"
         )
+        if not allow_clarify:
+            content = f"{content}\n\n{KNOWLEDGE_RESUME_NO_CLARIFY}"
         return complete_text(
             messages=[{"role": "user", "content": content}],
             system=[PROCESS_BLOCK, {"type": "text", "text": KNOWLEDGE_COMPOSE_PROMPT}],
