@@ -5,18 +5,21 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    rag_base_url: str = "http://localhost:7799"
+    # RAG (Qdrant read path)
+    qdrant_endpoint: str = "http://localhost:6333"
+    qdrant_api_key: str = "dummy"
+    google_api_key: str = ""
+    embedding_model: str = "gemini-embedding-001"
+    embedding_dim: int = 3072
     product_collection: str = "cenlab"
     agent_model: str = "gpt-4o-mini"
 
     # Per-agent model overrides — default to agent_model if unset
     triage_model: str | None = "gpt-4o-mini"
     knowledge_model: str | None = "gpt-4o"
-    knowledge_grader_model: str | None = "gpt-4o-mini"
-    knowledge_contextualize_model: str | None = "gpt-4o-mini"
+    knowledge_contextualize_model: str | None = "gpt-4o"
     verification_model: str | None = "gpt-4o-mini"
     flow_model: str | None = "gpt-4o-mini"
-    diagnostic_model: str | None = "gpt-4o-mini"
 
     def model_for(self, agent: str) -> str:
         return getattr(self, f"{agent}_model", None) or self.agent_model
