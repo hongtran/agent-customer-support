@@ -28,4 +28,10 @@ async def embed_query(text: str) -> list[float]:
             output_dimensionality=cfg.embedding_dim,
         ),
     )
-    return list(resp.embeddings[0].values)
+    embeddings = resp.embeddings
+    if not embeddings:
+        raise ValueError("Embedding response contained no embeddings")
+    values = embeddings[0].values
+    if values is None:
+        raise ValueError("Embedding response contained no values")
+    return list(values)

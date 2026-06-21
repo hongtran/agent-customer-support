@@ -100,6 +100,10 @@ class RagClient:
                 "grounding_note": grounding,
             }
             sp.update(
-                output={"top_confidence": top_conf, "n_passages": len(passages), "citations": citations}
+                output={
+                    "top_confidence": top_conf,
+                    "n_passages": len(passages),
+                    "citations": citations,
+                }
             )
             return result
