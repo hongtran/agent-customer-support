@@ -18,6 +18,22 @@ def _text(point: Any) -> str:
     return (point.payload or {}).get("page_content", "")
 
 
+def _normalize_collection(name: str) -> str:
+    """Resolve a logical collection name to the physical Qdrant collection.
+
+    Mirrors enterprise-llm-service's RagManager, which stores base names in
+    config but indexes/queries under a versioned name
+    (`name.replace("_v2", "") + "_v3"`; see
+    ../enterprise-llm-service/enterprise_llm_service/rag/__init__.py). The
+    legacy /rag/query applied this transform server-side, so the in-repo read
+    path must apply it too or it queries a non-existent collection. Already
+    `_v3`-suffixed names are passed through unchanged.
+    """
+    if name.endswith("_v3"):
+        return name
+    return name.replace("_v2", "") + "_v3"
+
+
 class RagClient:
     def __init__(self, client: AsyncQdrantClient | None = None) -> None:
         cfg = get_settings()
@@ -34,13 +50,18 @@ class RagClient:
         doc_type: str | None = None,
         applications: list[str] | None = None,
     ) -> dict:
+        resolved_collection = _normalize_collection(collection)
         with tracing.span(
             "rag.search",
-            input={"query": query, "collection": collection, "applications": applications or []},
+            input={
+                "query": query,
+                "collection": resolved_collection,
+                "applications": applications or [],
+            },
         ) as sp:
             vec = await embed_query(query)
             resp = await self._client.query_points(
-                collection_name=collection,
+                collection_name=resolved_collection,
                 query=vec,
                 limit=top_k * 4,
                 with_payload=True,
