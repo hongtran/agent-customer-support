@@ -1,66 +1,112 @@
 import pytest
-import respx
-import httpx
 from contextlib import contextmanager
 from unittest.mock import MagicMock
+
+from qdrant_client import AsyncQdrantClient, models
+
 from agent_customer_support.rag_client import RagClient
 import agent_customer_support.rag_client as rag_client_mod
 
 pytestmark = pytest.mark.asyncio
 
+COLLECTION = "cenlab"
 
-@respx.mock
-async def test_search_returns_passages_and_citations():
-    respx.post("http://localhost:7799/rag/query").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "documents": ["Bước 1: vào menu X", "Bước 2: nhấn Lưu"],
-                "metadatas": [
-                    {"confidence": 0.82, "source_doc_id": "hdsd#3.4"},
-                    {"confidence": 0.5, "source_doc_id": "hdsd#3.4"},
-                ],
+
+def _point(pid, vector, *, source_doc_id, doc_type="guide", application="Lab", text="noi dung"):
+    return models.PointStruct(
+        id=pid,
+        vector=vector,
+        payload={
+            "page_content": text,
+            "metadata": {
+                "source_doc_id": source_doc_id,
+                "doc_type": doc_type,
+                "application": application,
             },
-        )
+        },
     )
-    client = RagClient(base_url="http://localhost:7799")
-    res = await client.search("cách tạo mẫu", collection="cenlab")
-    assert res["top_confidence"] == 0.82
-    assert "Bước 1" in res["passages"][0]
-    assert "hdsd#3.4" in res["citations"]
 
 
-@respx.mock
+async def _client_with(points):
+    client = AsyncQdrantClient(location=":memory:")
+    await client.create_collection(
+        COLLECTION,
+        vectors_config=models.VectorParams(size=2, distance=models.Distance.COSINE),
+    )
+    await client.upsert(COLLECTION, points=points)
+    return client
+
+
+@pytest.fixture(autouse=True)
+def _stub_embed(monkeypatch):
+    async def fake_embed(text):
+        return [1.0, 0.0]
+
+    monkeypatch.setattr(rag_client_mod, "embed_query", fake_embed)
+
+
+async def test_threshold_keeps_only_scores_at_or_above_default():
+    # q=[1,0]; A->cos 1.0, C->cos 0.6, D->cos 0.3 (below 0.6 default)
+    client = await _client_with([
+        _point(1, [1.0, 0.0], source_doc_id="hdsd#1", text="Buoc 1"),
+        _point(2, [0.6, 0.8], source_doc_id="hdsd#2", text="Buoc 2"),
+        _point(3, [0.3, 0.9539392], source_doc_id="hdsd#3", text="Buoc 3"),
+    ])
+    res = await RagClient(client=client).search("q", collection=COLLECTION)
+    assert res["top_confidence"] == 1.0
+    assert set(res["citations"]) == {"hdsd#1", "hdsd#2"}  # hdsd#3 below 0.6
+
+
+async def test_floor_relax_when_nothing_clears_threshold():
+    client = await _client_with([
+        _point(1, [0.6, 0.8], source_doc_id="hdsd#2"),
+        _point(2, [0.3, 0.9539392], source_doc_id="hdsd#3"),
+    ])
+    # threshold 0.9 clears nothing -> relax to 0.25 floor -> both (>=0.25) returned
+    res = await RagClient(client=client).search("q", collection=COLLECTION, score_threshold=0.9)
+    assert set(res["citations"]) == {"hdsd#2", "hdsd#3"}
+
+
+async def test_application_filter_then_silent_relax():
+    client = await _client_with([
+        _point(1, [1.0, 0.0], source_doc_id="hdsd#1", application="Lab"),
+        _point(2, [0.6, 0.8], source_doc_id="hdsd#2", application="Other"),
+    ])
+    res = await RagClient(client=client).search(
+        "q", collection=COLLECTION, applications=["Lab"]
+    )
+    assert set(res["citations"]) == {"hdsd#1"}
+
+    # filter that matches nothing is silently relaxed to unfiltered
+    res2 = await RagClient(client=client).search(
+        "q", collection=COLLECTION, applications=["DoesNotExist"]
+    )
+    assert set(res2["citations"]) == {"hdsd#1", "hdsd#2"}
+
+
+async def test_dedup_keeps_highest_scoring_chunk_per_source():
+    client = await _client_with([
+        _point(1, [1.0, 0.0], source_doc_id="hdsd#1", text="best"),
+        _point(2, [0.6, 0.8], source_doc_id="hdsd#1", text="worse"),
+    ])
+    res = await RagClient(client=client).search("q", collection=COLLECTION)
+    assert res["citations"] == ["hdsd#1"]
+    assert res["passages"] == ["best"]
+    assert res["top_confidence"] == 1.0
+
+
 async def test_grounding_note_is_neutral_hint():
-    respx.post("http://localhost:7799/rag/query").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "documents": ["doc"],
-                "metadatas": [{"confidence": 0.7, "source_doc_id": "hdsd#1"}],
-            },
-        )
-    )
-    client = RagClient(base_url="http://localhost:7799")
-    res = await client.search("q", collection="cenlab")
+    client = await _client_with([
+        _point(1, [1.0, 0.0], source_doc_id="hdsd#1"),
+    ])
+    res = await RagClient(client=client).search("q", collection=COLLECTION)
     note = res["grounding_note"]
     assert "log_request" not in note
     assert "clarification" not in note
-    assert "0.7" in note or "confidence" in note.lower()
+    assert "confidence" in note.lower()
 
 
-@respx.mock
 async def test_search_invokes_tracing_span(monkeypatch):
-    respx.post("http://localhost:7799/rag/query").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "documents": ["Bước 1"],
-                "metadatas": [{"confidence": 0.75, "source_doc_id": "hdsd#5"}],
-            },
-        )
-    )
-
     handle = MagicMock()
     calls: dict = {}
 
@@ -71,9 +117,11 @@ async def test_search_invokes_tracing_span(monkeypatch):
 
     monkeypatch.setattr(rag_client_mod.tracing, "span", fake_span)
 
-    client = RagClient(base_url="http://localhost:7799")
-    res = await client.search("cách tạo mẫu", collection="cenlab")
+    client = await _client_with([
+        _point(1, [1.0, 0.0], source_doc_id="hdsd#5"),
+    ])
+    res = await RagClient(client=client).search("q", collection=COLLECTION)
 
     assert calls["name"] == "rag.search"
     handle.update.assert_called_once()
-    assert res["top_confidence"] == 0.75
+    assert res["top_confidence"] == 1.0
