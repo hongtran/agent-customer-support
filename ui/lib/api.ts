@@ -1,6 +1,6 @@
 // ui/lib/api.ts
 
-const BASE = "http://127.0.0.1:8000";
+const BASE = "http://127.0.0.1:8880";
 
 export interface Attachment {
   kind: "image";
@@ -13,10 +13,12 @@ export interface ChatPayload {
   conversation_id: string;
   message: string;
   attachments?: Attachment[];
+  applications?: string[];
 }
 
 export interface ChatResult {
   reply: string;
+  message_id?: string;
 }
 
 export async function sendMessage(payload: ChatPayload): Promise<ChatResult> {
@@ -31,5 +33,54 @@ export async function sendMessage(payload: ChatPayload): Promise<ChatResult> {
   }
 
   const data = await res.json();
-  return { reply: data.reply };
+  return { reply: data.reply, message_id: data.message_id };
+}
+
+export async function getCustomerApplications(customerId: string): Promise<string[]> {
+  const res = await fetch(`${BASE}/widget/customer/${encodeURIComponent(customerId)}`);
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.enabled_applications ?? [];
+}
+
+export async function sendFeedback(conversationId: string, messageId: string) {
+  await fetch(`${BASE}/widget/feedback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ conversation_id: conversationId, message_id: messageId, signal: "down" }),
+  });
+}
+
+function adminHeaders(token: string) {
+  return { "Content-Type": "application/json", "X-Admin-Token": token };
+}
+
+export async function listQA(token: string, status = "pending") {
+  const r = await fetch(`${BASE}/admin/qa?status=${status}`, { headers: adminHeaders(token) });
+  if (!r.ok) throw new Error(`list failed: ${r.status}`);
+  return r.json();
+}
+
+export async function approveQA(token: string, id: string) {
+  const r = await fetch(`${BASE}/admin/qa/${id}/approve`, {
+    method: "POST", headers: adminHeaders(token), body: "{}",
+  });
+  if (!r.ok) throw new Error(`approve failed: ${r.status}`);
+  return r.json();
+}
+
+export async function rejectQA(token: string, id: string) {
+  const r = await fetch(`${BASE}/admin/qa/${id}/reject`, {
+    method: "POST", headers: adminHeaders(token), body: "{}",
+  });
+  if (!r.ok) throw new Error(`reject failed: ${r.status}`);
+  return r.json();
+}
+
+export async function editQA(token: string, id: string, patch: Record<string, unknown>) {
+  const r = await fetch(`${BASE}/admin/qa/${id}`, {
+    method: "PATCH", headers: adminHeaders(token), body: JSON.stringify(patch),
+  });
+  if (!r.ok) throw new Error(`edit failed: ${r.status}`);
+  return r.json();
 }

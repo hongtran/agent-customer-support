@@ -6,14 +6,16 @@ import { useEffect, useRef } from "react";
 export interface Message {
   role: "user" | "agent" | "error";
   content: string;
+  messageId?: string;
 }
 
 interface Props {
   messages: Message[];
   loading: boolean;
+  onFeedbackDown?: (messageId: string) => void;
 }
 
-export default function MessageList({ messages, loading }: Props) {
+export default function MessageList({ messages, loading, onFeedbackDown }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -37,6 +39,15 @@ export default function MessageList({ messages, loading }: Props) {
             }`}
           >
             {msg.content}
+            {msg.role === "agent" && msg.messageId && onFeedbackDown && (
+              <button
+                aria-label="Không hữu ích"
+                onClick={() => onFeedbackDown(msg.messageId!)}
+                style={{ marginLeft: 8, opacity: 0.6 }}
+              >
+                👎
+              </button>
+            )}
           </div>
         </div>
       ))}
