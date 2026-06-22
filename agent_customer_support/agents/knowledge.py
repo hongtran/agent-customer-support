@@ -189,7 +189,7 @@ class KnowledgeAgent:
 
         qa_res = await self._safe_qa_search(ctx, query, applications, cfg)
         qa_passages = qa_res.get("passages", []) or []
-        qa_leads = bool(qa_passages) and qa_res.get("top_confidence", 0.0) >= cfg.qa_lead_threshold
+        qa_leads = bool(qa_passages) and (qa_res.get("top_confidence") or 0.0) >= cfg.qa_lead_threshold
         qa_citations = qa_res.get("citations", []) or []
         if qa_citations:
             citations = citations + [f"qa:{c}" for c in qa_citations]
