@@ -1,6 +1,5 @@
 import pytest
 from unittest.mock import AsyncMock
-import agent_customer_support.agents.knowledge as kn
 from agent_customer_support.agents.knowledge import KnowledgeAgent
 from agent_customer_support.agents.context import TurnContext
 from agent_customer_support.config import get_settings
