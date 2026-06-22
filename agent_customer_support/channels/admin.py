@@ -70,7 +70,10 @@ async def edit_qa(
         rec.application = patch.application
     await qa.update(rec)
     if rec.status == "approved":
-        await indexer.upsert(rec)
+        try:
+            await indexer.upsert(rec)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="indexing failed") from exc
     return rec
 
 
@@ -86,7 +89,10 @@ async def approve_qa(
         raise HTTPException(status_code=404, detail="not found")
     if not rec.answer.strip():
         raise HTTPException(status_code=409, detail="answer required before approval")
-    await indexer.upsert(rec)  # index-first: only persist approval if this succeeds
+    try:
+        await indexer.upsert(rec)  # index-first: only persist approval if this succeeds
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="indexing failed") from exc
     rec.status = "approved"
     rec.approved_by = body.approved_by
     rec.indexed_at = datetime.now(UTC)

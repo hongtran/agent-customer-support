@@ -80,6 +80,24 @@ def test_approve_empty_answer_409(wired):
     assert indexer.upserted == []
 
 
+def test_approve_indexing_failure_returns_502(wired):
+    store, _, client = wired
+
+    class FailingIndexer(FakeIndexer):
+        async def upsert(self, record):
+            raise RuntimeError("qdrant down")
+
+    failing_indexer = FailingIndexer()
+    app.dependency_overrides[get_qa_indexer] = lambda: failing_indexer
+
+    r = client.post("/admin/qa", json={"question": "q", "answer": "a"}, headers=HEADERS)
+    rid = r.json()["id"]
+
+    appr = client.post(f"/admin/qa/{rid}/approve", json={}, headers=HEADERS)
+    assert appr.status_code == 502
+    assert store.by_id[rid].status != "approved"
+
+
 def test_archive_deletes_point(wired):
     store, indexer, client = wired
     r = client.post("/admin/qa", json={"question": "q", "answer": "a"}, headers=HEADERS)
