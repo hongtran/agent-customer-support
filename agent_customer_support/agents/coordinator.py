@@ -187,14 +187,16 @@ class Coordinator:
             ctx.customer.customer_id,
             Turn(role="user", content=ctx.message, attachments=ctx.attachments),
         )
+        assistant_turn = Turn(role="assistant", content=result.reply)
         await self.conversations.append(
             ctx.session.conversation_id,
             ctx.customer.customer_id,
-            Turn(role="assistant", content=result.reply),
+            assistant_turn,
         )
         return ChatResponse(
             conversation_id=ctx.session.conversation_id,
             reply=result.reply,
             escalated=result.escalated,
             citations=result.citations,
+            message_id=assistant_turn.id,
         )
