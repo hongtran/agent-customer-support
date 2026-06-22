@@ -21,6 +21,7 @@ def _ctx(message="cách tạo phiếu?") -> TurnContext:
         rag=AsyncMock(),
         backlog=AsyncMock(),
         flow_store=AsyncMock(),
+        qa_store=AsyncMock(),
     )
 
 
@@ -94,7 +95,7 @@ async def test_composes_answer_from_passages():
         res = await KnowledgeAgent().run(ctx)
     assert res.resolved is True
     assert "menu X" in res.reply
-    ctx.rag.search.assert_awaited_once()
+    assert ctx.rag.search.await_count >= 1
 
 
 async def test_always_composes_even_with_empty_passages():
@@ -134,7 +135,7 @@ async def test_second_no_answer_logs_to_backlog():
         res = await KnowledgeAgent().run(ctx)
     assert res.resolved is False
     assert ctx.session.pending is None  # flag consumed
-    assert ctx.rag.search.await_count == 1  # single attempt only
+    assert ctx.rag.search.await_count == 2  # product + qa (one each, single round-trip)
     ctx.backlog.add.assert_awaited_once()
     assert ctx.backlog.add.call_args.kwargs["type"] == "how_to_missing"
 
@@ -281,7 +282,7 @@ async def test_run_uses_contextualized_query_for_search():
         res = await KnowledgeAgent().run(ctx)
 
     assert res.resolved is True
-    ctx.rag.search.assert_awaited_once_with(standalone, collection=ANY, applications=None)
+    ctx.rag.search.assert_any_await(standalone, collection=ANY, applications=None)
     assert standalone in call_log[0]  # compose received the standalone question
 
 
