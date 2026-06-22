@@ -1,5 +1,6 @@
 from datetime import datetime, UTC
 from typing import Literal
+from uuid import uuid4
 from pydantic import BaseModel, Field
 
 
@@ -30,7 +31,7 @@ class FlowOutcome(BaseModel):
 class Flow(BaseModel):
     id: str
     title: str
-    module: str
+    application: str
     scope: str = "global"
     version: int = 1
     language: str = "vi"
@@ -45,7 +46,7 @@ class Flow(BaseModel):
 class CustomerProfile(BaseModel):
     customer_id: str
     name: str
-    enabled_modules: list[str] = Field(default_factory=list)
+    enabled_applications: list[str] = Field(default_factory=list)
     config_notes: str | None = None
 
 
@@ -54,14 +55,15 @@ class CustomerProfile(BaseModel):
 
 class Attachment(BaseModel):
     kind: Literal["image"]
-    media_type: str          # image/png | image/jpeg
-    data: str                # base64-encoded bytes
+    media_type: str  # image/png | image/jpeg
+    data: str  # base64-encoded bytes
 
 
 # ---- Conversation ----
 
 
 class Turn(BaseModel):
+    id: str = Field(default_factory=lambda: uuid4().hex)
     role: Literal["user", "assistant"]
     content: str
     attachments: list[Attachment] = Field(default_factory=list)
@@ -83,9 +85,31 @@ class RequestRecord(BaseModel):
     customer_id: str
     type: Literal["feature", "bug", "how_to_missing"]
     summary: str
-    module: str | None = None
+    application: str | None = None
     transcript: str = ""
     created_at: datetime = Field(default_factory=_now)
+
+
+# ---- Q&A learning loop ----
+
+
+class QARecord(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    question: str
+    answer: str = ""
+    status: Literal["pending", "approved", "rejected", "archived"] = "pending"
+    source: Literal["cannot_answer", "feedback", "manual"]
+    application: str | None = None
+    customer_id: str | None = None
+    conversation_id: str | None = None
+    feedback_message_id: str | None = None
+    bad_answer: str | None = None
+    transcript: str = ""
+    qdrant_point_id: str | None = None
+    indexed_at: datetime | None = None
+    approved_by: str | None = None
+    created_at: datetime = Field(default_factory=_now)
+    updated_at: datetime = Field(default_factory=_now)
 
 
 # ---- Session ----
@@ -95,8 +119,9 @@ class SessionState(BaseModel):
     conversation_id: str
     active_flow_id: str | None = None
     current_step_id: str | None = None
-    pending: Literal["verify_issue"] | None = None
+    pending: Literal["verify_issue", "knowledge_clarify"] | None = None
     pending_context: dict | None = None
+    selected_applications: list[str] = Field(default_factory=list)
     updated_at: datetime = Field(default_factory=_now)
 
 
@@ -108,6 +133,7 @@ class ChatRequest(BaseModel):
     conversation_id: str
     message: str
     attachments: list[Attachment] = Field(default_factory=list)
+    applications: list[str] = Field(default_factory=list)
 
 
 class ChatResponse(BaseModel):
@@ -115,6 +141,7 @@ class ChatResponse(BaseModel):
     reply: str
     citations: list[str] = Field(default_factory=list)
     escalated: bool = False
+    message_id: str = ""
 
 
 # ---- Agent contract ----

@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     embedding_model: str = "gemini-embedding-001"
     embedding_dim: int = 3072
     product_collection: str = "cenlab"
+    qa_collection: str = "cenlab_qa"
     agent_model: str = "gpt-4o-mini"
 
     # Per-agent model overrides — default to agent_model if unset
@@ -31,12 +32,14 @@ class Settings(BaseSettings):
     session_ttl_seconds: int = 3600
 
     zalo_cs_webhook_url: str | None = None
+    admin_token: str = ""
 
     # table names
     table_customers: str = "acs_customers"
     table_flows: str = "acs_flows"
     table_conversations: str = "acs_conversations"
     table_requests: str = "acs_requests"
+    table_qa: str = "acs_qa"
 
     # observability
     langfuse_public_key: str | None = None
