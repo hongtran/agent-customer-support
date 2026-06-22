@@ -5,6 +5,7 @@ from agent_customer_support.agents.prompts import (
     KNOWLEDGE_CONTEXTUALIZE_PROMPT,
     KNOWLEDGE_CONTEXTUALIZE_VISION_PROMPT,
     KNOWLEDGE_COMPOSE_PROMPT,
+    KNOWLEDGE_COMPOSE_PROMPT_WITH_QA,
     KNOWLEDGE_RESUME_NO_CLARIFY,
     PROCESS_BLOCK,
 )
@@ -106,14 +107,17 @@ class KnowledgeAgent:
         transcript: str,
         cfg: Settings,
         allow_clarify: bool = True,
+        qa_passages: list[str] | None = None,
+        qa_leads: bool = False,
     ) -> str:
         """Compose a grounded answer from the always-on process + retrieved passages.
 
-        The process context is injected as a cached system prefix (PROCESS_BLOCK);
-        passages carry the per-module detail and may be empty. Transcript is passed
-        for context so the model can resolve remaining ambiguity in phrasing — but
-        content must still come only from the two sources (enforced by the prompt).
+        When CS-verified Q&A passages are present, switch to the three-source prompt
+        and append a CS-answer block — marked authoritative when qa_leads, else
+        supplementary. With no qa_passages, behavior is identical to the two-source
+        path (default).
         """
+        qa_passages = qa_passages or []
         if _HAS_PRIOR_TURN in transcript:
             history = f"Lịch sử hội thoại:\n{transcript}\n\n"
         else:
@@ -121,11 +125,21 @@ class KnowledgeAgent:
         content = (
             f"{history}Câu hỏi hiện tại: {question}\n\nĐoạn trích:\n{_passages_block(passages)}"
         )
+        if qa_passages:
+            header = (
+                "ĐÁP ÁN CS XÁC NHẬN — ưu tiên cao nhất cho câu hỏi này:"
+                if qa_leads
+                else "ĐÁP ÁN CS XÁC NHẬN — bổ trợ:"
+            )
+            content = f"{content}\n\n{header}\n{_passages_block(qa_passages)}"
+            compose_prompt = KNOWLEDGE_COMPOSE_PROMPT_WITH_QA
+        else:
+            compose_prompt = KNOWLEDGE_COMPOSE_PROMPT
         if not allow_clarify:
             content = f"{content}\n\n{KNOWLEDGE_RESUME_NO_CLARIFY}"
         return complete_text(
             messages=[{"role": "user", "content": content}],
-            system=[PROCESS_BLOCK, {"type": "text", "text": KNOWLEDGE_COMPOSE_PROMPT}],
+            system=[PROCESS_BLOCK, {"type": "text", "text": compose_prompt}],
             model=cfg.model_for("knowledge"),
         )
 
