@@ -3,6 +3,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from agent_customer_support.channels.widget import router as widget_router, get_agent
+from agent_customer_support.channels.admin import router as admin_router
+from agent_customer_support.stores.qa_store import QAStore
 from agent_customer_support.observability import tracing
 from agent_customer_support.stores.customer_registry import CustomerRegistry
 from agent_customer_support.stores.conversation_store import ConversationStore
@@ -14,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    for store in (CustomerRegistry(), ConversationStore(), FlowStore(), RequestBacklog()):
+    for store in (CustomerRegistry(), ConversationStore(), FlowStore(), RequestBacklog(), QAStore()):
         try:
             await store.init()
         except Exception as exc:
@@ -30,10 +32,11 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
     allow_methods=["POST", "GET"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "X-Admin-Token"],
 )
 
 app.include_router(widget_router)
+app.include_router(admin_router)
 
 
 @app.get("/health")
