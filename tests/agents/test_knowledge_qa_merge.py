@@ -83,7 +83,7 @@ async def test_qa_search_failure_degrades_to_product_only(monkeypatch):
     ctx = _ctx()
     ctx.rag = type("R", (), {})()
     ctx.rag.search = AsyncMock(side_effect=_search_dispatch(RuntimeError("no collection")))
-    res = await agent.run(ctx)  # must not raise
+    await agent.run(ctx)  # must not raise
     assert cap["qa_passages"] == []
     assert cap["qa_leads"] is False
     assert cap["passages"] == ["guide"]
