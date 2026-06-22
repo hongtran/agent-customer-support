@@ -7,7 +7,10 @@ from agent_customer_support.agents.triage import TriageAgent
 from agent_customer_support.agents.verification import IssueVerificationAgent
 from agent_customer_support.escalation import Escalator
 from agent_customer_support.models import (
-    AgentResult, ChatResponse, CustomerProfile, Turn,
+    AgentResult,
+    ChatResponse,
+    CustomerProfile,
+    Turn,
 )
 from agent_customer_support.observability import tracing
 from agent_customer_support.rag_client import RagClient
@@ -15,9 +18,12 @@ from agent_customer_support.stores.conversation_store import ConversationStore
 from agent_customer_support.stores.customer_registry import CustomerRegistry
 from agent_customer_support.stores.flow_store import FlowStore
 from agent_customer_support.stores.request_backlog import RequestBacklog
+from agent_customer_support.stores.qa_store import QAStore
 from agent_customer_support.stores.session_store import SessionStore
 
-_BLOCK_REPLY = "Xin lỗi, mình chưa thể xử lý nội dung này. Bạn vui lòng nhập câu hỏi về phần mềm CenLab nhé."
+_BLOCK_REPLY = (
+    "Xin lỗi, mình chưa thể xử lý nội dung này. Bạn vui lòng nhập câu hỏi về phần mềm CenLab nhé."
+)
 _FALLBACK_REPLY = "Xin lỗi, mình cần kiểm tra lại thông tin này. Bạn vui lòng thử lại hoặc yêu cầu gặp nhân viên hỗ trợ."
 
 
@@ -27,6 +33,7 @@ class Coordinator:
         self.conversations = ConversationStore()
         self.flow_store = FlowStore()
         self.backlog = RequestBacklog()
+        self.qa_store = QAStore()
         self.sessions = SessionStore()
         self.rag = RagClient()
         self.escalator = Escalator()
@@ -44,23 +51,43 @@ class Coordinator:
             sp.update(output=res.model_dump(mode="json"))
             return res
 
-    async def handle_turn(self, *, customer_id: str, conversation_id: str,
-                          message: str, attachments: list) -> ChatResponse:
+    async def handle_turn(
+        self,
+        *,
+        customer_id: str,
+        conversation_id: str,
+        message: str,
+        attachments: list,
+        applications: list[str] | None = None,
+    ) -> ChatResponse:
         # Root of the turn. session_id groups a whole conversation across turns.
-        with tracing.trace("turn", session_id=conversation_id, user_id=customer_id,
-                           input=message) as turn:
+        with tracing.trace(
+            "turn", session_id=conversation_id, user_id=customer_id, input=message
+        ) as turn:
             # 1. Load context
             customer = await self.customers.get(customer_id) or CustomerProfile(
-                customer_id=customer_id, name=customer_id)
+                customer_id=customer_id, name=customer_id
+            )
             session = await self.sessions.get(conversation_id)
+
+            # Store application selection provided at conversation start (first turn only,
+            # but allow UI to update it any time a non-empty list is sent).
+            if applications:
+                session.selected_applications = applications
             conv = await self.conversations.load(conversation_id)
             transcript = "\n".join(f"{t.role}: {t.content}" for t in conv.turns)
             ctx = TurnContext(
-                customer=customer, session=session, conversation=conv,
-                message=message, attachments=attachments,
+                customer=customer,
+                session=session,
+                conversation=conv,
+                message=message,
+                attachments=attachments,
                 transcript=transcript + f"\nuser: {message}",
-                rag=self.rag, flow_store=self.flow_store,
-                backlog=self.backlog, escalator=self.escalator,
+                rag=self.rag,
+                flow_store=self.flow_store,
+                backlog=self.backlog,
+                qa_store=self.qa_store,
+                escalator=self.escalator,
             )
 
             # 2. Input guardrail
@@ -76,9 +103,11 @@ class Coordinator:
             # 7. Output guardrail
             gout = await self.guardrail.check_output(result.reply)
             if not gout["pass"]:
-                result = AgentResult(reply=_FALLBACK_REPLY,
-                                     escalated=result.escalated,
-                                     new_session=result.new_session)
+                result = AgentResult(
+                    reply=_FALLBACK_REPLY,
+                    escalated=result.escalated,
+                    new_session=result.new_session,
+                )
             resp = await self._finish(ctx, result, session)
             turn.update(output={"reply": resp.reply, "escalated": resp.escalated})
             return resp
@@ -89,22 +118,28 @@ class Coordinator:
             res = await self._traced("verification", lambda: self.verification.run(ctx), ctx)
             return await self._after_verification(ctx, res, session)
 
+        # Resume pending knowledge clarification: the user is answering our clarify
+        # question (often with a screenshot), so go straight back to knowledge —
+        # bypass triage to keep the loop deterministic and bounded to one attempt.
+        if session.pending == "knowledge_clarify":
+            return await self._knowledge_phase(ctx, session)
+
         # Active flow
         if session.active_flow_id:
             return await self._traced("flow", lambda: self.flow.run(ctx), ctx)
 
-        # Triage
+        # Triage (route-only)
         tri = await self._traced("triage", lambda: self.triage.run(ctx), ctx)
-        if tri.action == "reply":
-            return tri
         if tri.routed_to == "flow":
             return await self._traced("flow", lambda: self.flow.run(ctx), ctx)
         if tri.routed_to == "escalate":
             return await self._traced(
-                "escalation",
-                lambda: self.escalation.run(ctx, reason="user requested human"), ctx)
+                "escalation", lambda: self.escalation.run(ctx, reason="user requested human"), ctx
+            )
 
-        # knowledge
+        return await self._knowledge_phase(ctx, session)
+
+    async def _knowledge_phase(self, ctx: TurnContext, session) -> AgentResult:
         kn = await self._traced("knowledge", lambda: self.knowledge.run(ctx), ctx)
         if kn.suspected_bug:
             session.pending = "verify_issue"
@@ -113,8 +148,9 @@ class Coordinator:
             return await self._after_verification(ctx, ver, session)
         if kn.resolved is False:
             return await self._traced(
-                "escalation",
-                lambda: self.escalation.run(ctx, reason="knowledge unresolved"), ctx)
+                "escalation", lambda: self.escalation.run(ctx, reason="knowledge unresolved"), ctx
+            )
+        # resolved, or a clarify reply (resolved is None) — return as-is.
         return kn
 
     async def _after_verification(self, ctx, res: AgentResult, session) -> AgentResult:
@@ -125,18 +161,21 @@ class Coordinator:
         # Evidence ready -> log bug + escalate
         ev = res.evidence or {}
         await self.backlog.add(
-            customer_id=ctx.customer.customer_id, type="bug",
-            summary=ev.get("summary", "bug"), module=ev.get("module"),
-            transcript=ctx.transcript)
+            customer_id=ctx.customer.customer_id,
+            type="bug",
+            summary=ev.get("summary", "bug"),
+            application=ev.get("application"),
+            transcript=ctx.transcript,
+        )
         session.pending = None
         session.pending_context = None
         esc = await self._traced(
-            "escalation", lambda: self.escalation.run(ctx, reason="verified bug"), ctx)
+            "escalation", lambda: self.escalation.run(ctx, reason="verified bug"), ctx
+        )
         esc.new_session = session
         return esc
 
-    async def _finish(self, ctx: TurnContext, result: AgentResult,
-                      session) -> ChatResponse:
+    async def _finish(self, ctx: TurnContext, result: AgentResult, session) -> ChatResponse:
         # Apply session changes: prefer result.new_session if provided, else use session
         new_session = result.new_session if result.new_session is not None else session
         new_session.conversation_id = ctx.session.conversation_id
@@ -144,11 +183,18 @@ class Coordinator:
 
         # Persist turns
         await self.conversations.append(
-            ctx.session.conversation_id, ctx.customer.customer_id,
-            Turn(role="user", content=ctx.message, attachments=ctx.attachments))
+            ctx.session.conversation_id,
+            ctx.customer.customer_id,
+            Turn(role="user", content=ctx.message, attachments=ctx.attachments),
+        )
         await self.conversations.append(
-            ctx.session.conversation_id, ctx.customer.customer_id,
-            Turn(role="assistant", content=result.reply))
-        return ChatResponse(conversation_id=ctx.session.conversation_id,
-                            reply=result.reply, escalated=result.escalated,
-                            citations=result.citations)
+            ctx.session.conversation_id,
+            ctx.customer.customer_id,
+            Turn(role="assistant", content=result.reply),
+        )
+        return ChatResponse(
+            conversation_id=ctx.session.conversation_id,
+            reply=result.reply,
+            escalated=result.escalated,
+            citations=result.citations,
+        )

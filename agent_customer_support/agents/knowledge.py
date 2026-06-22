@@ -14,7 +14,7 @@ from agent_customer_support.llm.normalize import (
     to_anthropic_content,
     to_openai_content,
 )
-from agent_customer_support.models import AgentResult
+from agent_customer_support.models import AgentResult, QARecord
 
 _NO_ANSWER_RE = re.compile(r"\[\[no_answer\]\]")
 _BUG_RE = re.compile(r"\[\[suspected_bug:([a-zA-Z0-9_\-]+)\]\]")
@@ -208,6 +208,15 @@ class KnowledgeAgent:
             summary=ctx.message,
             application=None,
             transcript=ctx.transcript,
+        )
+        await ctx.qa_store.add(
+            QARecord(
+                question=ctx.message,
+                source="cannot_answer",
+                customer_id=ctx.customer.customer_id,
+                conversation_id=ctx.session.conversation_id,
+                transcript=ctx.transcript,
+            )
         )
         return AgentResult(
             reply="Mình chưa tìm thấy thông tin cụ thể này trong tài liệu. "
