@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     embedding_dim: int = 3072
     product_collection: str = "cenlab"
     qa_collection: str = "cenlab_qa"
+    qa_lead_threshold: float = 0.85
     agent_model: str = "gpt-4o-mini"
 
     # Per-agent model overrides — default to agent_model if unset
@@ -32,7 +33,7 @@ class Settings(BaseSettings):
     session_ttl_seconds: int = 3600
 
     zalo_cs_webhook_url: str | None = None
-    admin_token: str = ""
+    admin_token: str = "admin-secret"
 
     # table names
     table_customers: str = "acs_customers"
