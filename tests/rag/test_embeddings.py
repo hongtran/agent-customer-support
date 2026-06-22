@@ -33,3 +33,29 @@ async def test_embed_query_calls_gemini_with_retrieval_query(monkeypatch):
     assert captured["contents"] == "cách tạo mẫu"
     assert captured["task_type"] == "RETRIEVAL_QUERY"
     assert captured["dim"] == 3072
+
+
+async def test_embed_document_uses_retrieval_document(monkeypatch):
+    captured = {}
+
+    class FakeEmbeddings:
+        def __init__(self, values):
+            self.embeddings = [type("E", (), {"values": values})()]
+
+    class FakeAio:
+        class models:
+            @staticmethod
+            async def embed_content(*, model, contents, config):
+                captured["task_type"] = config.task_type
+                captured["dim"] = config.output_dimensionality
+                return FakeEmbeddings([0.4, 0.5, 0.6])
+
+    class FakeClient:
+        aio = FakeAio()
+
+    monkeypatch.setattr(emb, "_client", lambda: FakeClient())
+
+    vec = await emb.embed_document("Câu hỏi: ...")
+    assert vec == [0.4, 0.5, 0.6]
+    assert captured["task_type"] == "RETRIEVAL_DOCUMENT"
+    assert captured["dim"] == 3072

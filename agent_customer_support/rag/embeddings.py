@@ -11,20 +11,13 @@ def _client() -> genai.Client:
     return genai.Client(api_key=get_settings().google_api_key)
 
 
-async def embed_query(text: str) -> list[float]:
-    """Embed a search query with the same model/params used to index the
-    collection, so the query vector lands in the same space.
-
-    task_type RETRIEVAL_QUERY mirrors how documents were indexed
-    (RETRIEVAL_DOCUMENT); output_dimensionality must match the collection's
-    vector size or the search mismatches.
-    """
+async def _embed(text: str, task_type: str) -> list[float]:
     cfg = get_settings()
     resp = await _client().aio.models.embed_content(
         model=cfg.embedding_model,
         contents=text,
         config=types.EmbedContentConfig(
-            task_type="RETRIEVAL_QUERY",
+            task_type=task_type,
             output_dimensionality=cfg.embedding_dim,
         ),
     )
@@ -35,3 +28,15 @@ async def embed_query(text: str) -> list[float]:
     if values is None:
         raise ValueError("Embedding response contained no values")
     return list(values)
+
+
+async def embed_query(text: str) -> list[float]:
+    """Embed a search query (RETRIEVAL_QUERY) — matches the indexed documents'
+    space so search lands correctly."""
+    return await _embed(text, "RETRIEVAL_QUERY")
+
+
+async def embed_document(text: str) -> list[float]:
+    """Embed a document/stored question (RETRIEVAL_DOCUMENT) for the qa index,
+    paired with RETRIEVAL_QUERY at search time."""
+    return await _embed(text, "RETRIEVAL_DOCUMENT")
