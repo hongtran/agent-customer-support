@@ -36,6 +36,13 @@ class Settings(BaseSettings):
     zalo_cs_webhook_url: str | None = None
     admin_token: str = "admin-secret"
 
+    # comma-separated list of allowed CORS origins
+    cors_allowed_origins: str = "http://localhost:3000"
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [o.strip() for o in self.cors_allowed_origins.split(",") if o.strip()]
+
     # table names
     table_customers: str = "acs_customers"
     table_flows: str = "acs_flows"

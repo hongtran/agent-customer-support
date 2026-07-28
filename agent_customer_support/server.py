@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from agent_customer_support.channels.widget import router as widget_router, get_agent
 from agent_customer_support.channels.admin import router as admin_router
+from agent_customer_support.config import get_settings
 from agent_customer_support.stores.qa_store import QAStore
 from agent_customer_support.observability import tracing
 from agent_customer_support.stores.customer_registry import CustomerRegistry
@@ -30,7 +31,7 @@ app = FastAPI(title="CenLab Support Agent", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=get_settings().cors_origins,
     allow_methods=["POST", "GET", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["Content-Type", "X-Admin-Token"],
 )
