@@ -27,6 +27,7 @@ class Settings(BaseSettings):
         return getattr(self, f"{agent}_model", None) or self.agent_model
 
     dynamodb_endpoint_url: str | None = None
+    dynamodb_auto_create_tables: bool = True
     aws_region: str = "ap-southeast-1"
 
     redis_url: str = "redis://localhost:6379/0"

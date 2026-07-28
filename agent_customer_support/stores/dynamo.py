@@ -20,6 +20,8 @@ async def get_resource():
 
 
 async def ensure_table(name: str, key: str = "id") -> None:
+    if not get_settings().dynamodb_auto_create_tables:
+        return
     async with get_resource() as ddb:
         try:
             await ddb.create_table(
