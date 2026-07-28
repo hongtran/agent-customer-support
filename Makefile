@@ -3,7 +3,7 @@
 build:
 	poetry install
 run:
-	poetry run uvicorn agent_customer_support.server:app --reload --port 8800
+	poetry run uvicorn agent_customer_support.server:app --reload --port 8800 --env-file .env
 test:
 	poetry run pytest -v
 lint:
