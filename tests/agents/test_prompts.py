@@ -2,12 +2,11 @@ from agent_customer_support.agents.prompts import (
     TRIAGE_PROMPT,
     VERIFICATION_PROMPT,
     GUARDRAIL_OUTPUT_PROMPT,
-    KNOWLEDGE_GRADER_PROMPT,
-    KNOWLEDGE_REFORMULATE_PROMPT,
+    KNOWLEDGE_CONTEXTUALIZE_PROMPT,
     KNOWLEDGE_COMPOSE_PROMPT,
-    DIAGNOSTIC_PROMPT,
+    PROCESS_CONTEXT,
+    PROCESS_BLOCK,
 )
-from agent_customer_support.config import Settings
 
 
 def test_prompts_are_nonempty_strings():
@@ -15,10 +14,9 @@ def test_prompts_are_nonempty_strings():
         TRIAGE_PROMPT,
         VERIFICATION_PROMPT,
         GUARDRAIL_OUTPUT_PROMPT,
-        KNOWLEDGE_GRADER_PROMPT,
-        KNOWLEDGE_REFORMULATE_PROMPT,
+        KNOWLEDGE_CONTEXTUALIZE_PROMPT,
         KNOWLEDGE_COMPOSE_PROMPT,
-        DIAGNOSTIC_PROMPT,
+        PROCESS_CONTEXT,
     ):
         assert isinstance(p, str) and len(p) > 20
 
@@ -30,22 +28,29 @@ def test_triage_is_route_only():
     assert "clarify" not in TRIAGE_PROMPT.lower()
 
 
-def test_grader_judges_content_not_score():
-    assert "answer_present" in KNOWLEDGE_GRADER_PROMPT
-
-
 def test_compose_has_no_answer_and_bug_markers():
     assert "[[no_answer]]" in KNOWLEDGE_COMPOSE_PROMPT
     assert "suspected_bug" in KNOWLEDGE_COMPOSE_PROMPT
 
 
-def test_diagnostic_prompt_requests_rule_id_json():
-    assert "rule_id" in DIAGNOSTIC_PROMPT
-    assert "JSON" in DIAGNOSTIC_PROMPT
+def test_compose_forbids_exposing_internal_refs():
+    # Step codes and passage indices must not leak to the user.
+    assert "KHÔNG lộ tham chiếu nội bộ" in KNOWLEDGE_COMPOSE_PROMPT
 
 
-def test_diagnostic_model_setting_overridable():
-    s = Settings(diagnostic_model="claude-haiku-4-5-20251001")
-    assert s.model_for("diagnostic") == "claude-haiku-4-5-20251001"
-    # falls back to agent_model when unset
-    assert Settings(diagnostic_model=None).model_for("diagnostic") == Settings().agent_model
+def test_compose_routes_admin_cases():
+    # Permission / missing-master-data questions must be flagged as admin work.
+    assert "VIỆC THUỘC ADMIN" in KNOWLEDGE_COMPOSE_PROMPT
+
+
+def test_process_context_has_admin_section_with_guidance():
+    assert "VIỆC THUỘC QUẢN TRỊ HỆ THỐNG/ADMIN" in PROCESS_CONTEXT
+    # the two canonical guidance lines for admin-owned cases (permission + master data)
+    assert "liên hệ quản trị hệ thống/admin" in PROCESS_CONTEXT
+    assert "chuẩn hoá master data" in PROCESS_CONTEXT
+
+
+def test_process_block_is_cacheable():
+    assert PROCESS_BLOCK["type"] == "text"
+    assert PROCESS_BLOCK["text"] == PROCESS_CONTEXT
+    assert PROCESS_BLOCK["cache_control"] == {"type": "ephemeral"}

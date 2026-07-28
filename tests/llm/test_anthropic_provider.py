@@ -18,9 +18,11 @@ def test_parses_text_response():
     client = MagicMock()
     client.messages.create.return_value = resp
     out = anthropic_complete_with_tools(
-        client=client, model="claude-3-5-sonnet",
+        client=client,
+        model="claude-3-5-sonnet",
         messages=[{"role": "user", "content": "hi"}],
-        tools=[], system="sys",
+        tools=[],
+        system="sys",
     )
     assert out["stop_reason"] == "end_turn"
     assert out["text"] == "hello"
@@ -32,23 +34,22 @@ def test_parses_tool_use():
         stop_reason="tool_use",
         content=[
             _block(type="text", text="let me check"),
-            _block(type="tool_use", id="t1", name="search_knowledge",
-                   input={"query": "x"}),
+            _block(type="tool_use", id="t1", name="search_knowledge", input={"query": "x"}),
         ],
         usage=SimpleNamespace(input_tokens=11, output_tokens=7),
     )
     client = MagicMock()
     client.messages.create.return_value = resp
     out = anthropic_complete_with_tools(
-        client=client, model="claude-3-5-sonnet",
+        client=client,
+        model="claude-3-5-sonnet",
         messages=[{"role": "user", "content": "hi"}],
-        tools=[{"name": "search_knowledge"}], system=None,
+        tools=[{"name": "search_knowledge"}],
+        system=None,
     )
     assert out["stop_reason"] == "tool_use"
     assert out["text"] == "let me check"
-    assert out["tool_calls"] == [
-        {"id": "t1", "name": "search_knowledge", "input": {"query": "x"}}
-    ]
+    assert out["tool_calls"] == [{"id": "t1", "name": "search_knowledge", "input": {"query": "x"}}]
 
 
 def test_surfaces_usage():
@@ -60,7 +61,10 @@ def test_surfaces_usage():
     client = MagicMock()
     client.messages.create.return_value = resp
     out = anthropic_complete_with_tools(
-        client=client, model="claude-3-5-sonnet",
-        messages=[{"role": "user", "content": "hi"}], tools=[], system=None,
+        client=client,
+        model="claude-3-5-sonnet",
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[],
+        system=None,
     )
     assert out["usage"] == {"input": 11, "output": 7}

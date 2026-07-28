@@ -56,8 +56,11 @@ def test_session_pending_defaults_none():
 
 
 def test_session_pending_verify():
-    s = SessionState(conversation_id="cv1", pending="verify_issue",
-                     pending_context={"summary": "x", "module": "m"})
+    s = SessionState(
+        conversation_id="cv1",
+        pending="verify_issue",
+        pending_context={"summary": "x", "module": "m"},
+    )
     assert s.pending == "verify_issue"
     assert s.pending_context["summary"] == "x"
 

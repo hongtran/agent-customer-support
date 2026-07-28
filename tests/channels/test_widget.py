@@ -29,10 +29,10 @@ def test_chat_passes_attachments():
     resp = client.post(
         "/widget/chat",
         json={
-            "customer_id": "c1", "conversation_id": "cv1", "message": "hello",
-            "attachments": [
-                {"kind": "image", "media_type": "image/png", "data": "QUJD"}
-            ],
+            "customer_id": "c1",
+            "conversation_id": "cv1",
+            "message": "hello",
+            "attachments": [{"kind": "image", "media_type": "image/png", "data": "QUJD"}],
         },
     )
     assert resp.status_code == 200
@@ -50,4 +50,5 @@ def test_health():
 
 def test_get_agent_is_singleton():
     from agent_customer_support.channels.widget import get_agent
+
     assert get_agent() is get_agent()

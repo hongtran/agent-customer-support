@@ -43,7 +43,7 @@ TOOL_DEFS: list[dict] = [
             "properties": {
                 "type": {"type": "string", "enum": ["feature", "bug", "how_to_missing"]},
                 "summary": {"type": "string"},
-                "module": {"type": "string"},
+                "application": {"type": "string"},
             },
             "required": ["type", "summary"],
         },
@@ -69,7 +69,7 @@ class ToolContext:
     escalator: Any
     conversation_id: str
     transcript: str = ""
-    last_fetched_flow: Any = None   # set by get_flow → enables flow activation in core
+    last_fetched_flow: Any = None  # set by get_flow → enables flow activation in core
 
 
 async def _dispatch(name: str, args: dict, ctx: ToolContext) -> dict:
@@ -77,7 +77,7 @@ async def _dispatch(name: str, args: dict, ctx: ToolContext) -> dict:
         return await ctx.rag.search(args["query"], collection=get_settings().product_collection)
 
     if name == "list_flows":
-        flows = await ctx.flow_store.list_for_modules(ctx.customer.enabled_modules)
+        flows = await ctx.flow_store.list_for_applications(ctx.customer.enabled_applications)
         return {"flows": [{"id": f.id, "title": f.title, "description": f.title} for f in flows]}
 
     if name == "get_flow":
@@ -93,7 +93,7 @@ async def _dispatch(name: str, args: dict, ctx: ToolContext) -> dict:
             customer_id=ctx.customer.customer_id,
             type=args["type"],
             summary=args["summary"],
-            module=args.get("module"),
+            application=args.get("application"),
             transcript=ctx.transcript,
         )
         return {"logged": True, "request_id": rec.id}

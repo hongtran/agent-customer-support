@@ -1,6 +1,11 @@
 def anthropic_complete_with_tools(
-    *, client, model: str, messages: list[dict],
-    tools: list[dict], system: str | None, max_tokens: int = 1500,
+    *,
+    client,
+    model: str,
+    messages: list[dict],
+    tools: list[dict],
+    system: str | list[dict] | None,
+    max_tokens: int = 1500,
 ) -> dict:
     kwargs: dict = {
         "model": model,
@@ -24,8 +29,7 @@ def anthropic_complete_with_tools(
 
     usage = getattr(resp, "usage", None)
     usage_details = (
-        {"input": usage.input_tokens, "output": usage.output_tokens}
-        if usage is not None else None
+        {"input": usage.input_tokens, "output": usage.output_tokens} if usage is not None else None
     )
     return {
         "stop_reason": resp.stop_reason,

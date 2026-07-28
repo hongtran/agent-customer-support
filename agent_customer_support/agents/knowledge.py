@@ -154,7 +154,7 @@ class KnowledgeAgent:
         missing collection (or any Qdrant error) must never break the guide path."""
         try:
             return await ctx.rag.search(
-                query, collection=cfg.qa_collection, applications=applications
+                query, collection=cfg.qa_collection, applications=applications, top_k=1, score_threshold=cfg.qa_lead_threshold
             )
         except Exception as exc:  # noqa: BLE001 - degrade, never break the answer
             logger.warning("qa search failed, using product-only: %s", exc)

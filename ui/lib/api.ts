@@ -61,6 +61,17 @@ export async function listQA(token: string, status = "pending") {
   return r.json();
 }
 
+export async function createQA(
+  token: string,
+  body: { question: string; answer?: string; application?: string | null },
+) {
+  const r = await fetch(`${BASE}/admin/qa`, {
+    method: "POST", headers: adminHeaders(token), body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`create failed: ${r.status}`);
+  return r.json();
+}
+
 export async function approveQA(token: string, id: string) {
   const r = await fetch(`${BASE}/admin/qa/${id}/approve`, {
     method: "POST", headers: adminHeaders(token), body: "{}",

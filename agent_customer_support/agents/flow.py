@@ -25,30 +25,39 @@ def build_assistant_message(out: dict, is_anthropic: bool) -> dict:
         if text:
             blocks.append({"type": "text", "text": text})
         for c in out["tool_calls"]:
-            blocks.append({"type": "tool_use", "id": c["id"],
-                           "name": c["name"], "input": c["input"]})
+            blocks.append(
+                {"type": "tool_use", "id": c["id"], "name": c["name"], "input": c["input"]}
+            )
         return {"role": "assistant", "content": blocks}
     return {
         "role": "assistant",
         "content": out.get("text"),
         "tool_calls": [
-            {"id": c["id"], "type": "function",
-             "function": {"name": c["name"],
-                          "arguments": json.dumps(c["input"])}}
+            {
+                "id": c["id"],
+                "type": "function",
+                "function": {"name": c["name"], "arguments": json.dumps(c["input"])},
+            }
             for c in out["tool_calls"]
         ],
     }
 
 
 FLOW_TOOLS = [
-    {"name": "list_flows",
-     "description": "Liệt kê các quy trình khả dụng cho khách hàng hiện tại.",
-     "input_schema": {"type": "object", "properties": {}}},
-    {"name": "get_flow",
-     "description": "Lấy chi tiết một quy trình theo flow_id để dẫn từng bước.",
-     "input_schema": {"type": "object",
-                      "properties": {"flow_id": {"type": "string"}},
-                      "required": ["flow_id"]}},
+    {
+        "name": "list_flows",
+        "description": "Liệt kê các quy trình khả dụng cho khách hàng hiện tại.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_flow",
+        "description": "Lấy chi tiết một quy trình theo flow_id để dẫn từng bước.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"flow_id": {"type": "string"}},
+            "required": ["flow_id"],
+        },
+    },
 ]
 MAX_ROUNDS = 5
 
@@ -71,16 +80,23 @@ class FlowAgent:
 
         system = build_system_prompt(ctx.customer, session, active_flow)
         tool_ctx = ToolContext(
-            customer=ctx.customer, rag=ctx.rag, flow_store=ctx.flow_store,
-            backlog=ctx.backlog, escalator=ctx.escalator,
-            conversation_id=session.conversation_id, transcript=ctx.transcript,
+            customer=ctx.customer,
+            rag=ctx.rag,
+            flow_store=ctx.flow_store,
+            backlog=ctx.backlog,
+            escalator=ctx.escalator,
+            conversation_id=session.conversation_id,
+            transcript=ctx.transcript,
         )
         messages: list[dict] = [{"role": "user", "content": ctx.message}]
         final_text = ""
-        is_anthropic = "claude" in get_settings().agent_model
+        flow_model = get_settings().model_for("flow")
+        is_anthropic = "claude" in flow_model
 
         for _ in range(MAX_ROUNDS):
-            out = complete_with_tools(messages=messages, tools=FLOW_TOOLS, system=system)
+            out = complete_with_tools(
+                messages=messages, tools=FLOW_TOOLS, system=system, model=flow_model
+            )
             if out["stop_reason"] != "tool_use":
                 final_text = out.get("text") or ""
                 break
@@ -89,14 +105,24 @@ class FlowAgent:
                 results = []
                 for call in out["tool_calls"]:
                     r = await dispatch(call["name"], call["input"], tool_ctx)
-                    results.append({"type": "tool_result", "tool_use_id": call["id"],
-                                    "content": json.dumps(r, ensure_ascii=False)})
+                    results.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": call["id"],
+                            "content": json.dumps(r, ensure_ascii=False),
+                        }
+                    )
                 messages.append({"role": "user", "content": results})
             else:
                 for call in out["tool_calls"]:
                     r = await dispatch(call["name"], call["input"], tool_ctx)
-                    messages.append({"role": "tool", "tool_call_id": call["id"],
-                                     "content": json.dumps(r, ensure_ascii=False)})
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call["id"],
+                            "content": json.dumps(r, ensure_ascii=False),
+                        }
+                    )
 
         clean, goto = parse_goto(final_text)
         effective = active_flow or tool_ctx.last_fetched_flow
@@ -108,7 +134,8 @@ class FlowAgent:
                     await ctx.escalator.escalate(
                         customer_id=ctx.customer.customer_id,
                         reason=res.outcome.reason or "flow escalate",
-                        transcript=ctx.transcript)
+                        transcript=ctx.transcript,
+                    )
                     escalated = True
                 session.active_flow_id = None
                 session.current_step_id = None

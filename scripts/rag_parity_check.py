@@ -21,6 +21,8 @@ QUERIES = [
     "cách tạo mẫu xét nghiệm",
     "đổi mật khẩu",
     "khôi phục tài khoản",
+    "Làm sao xử lý PYC sự cố?",
+    "Làm thế nào để hủy một PYCTN?",
 ]
 
 

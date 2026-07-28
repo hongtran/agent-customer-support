@@ -14,7 +14,8 @@ def _ctx(message, session=None) -> TurnContext:
         conversation=Conversation(conversation_id="cv1", customer_id="c1"),
         message=message,
         transcript=f"user: {message}",
-        rag=AsyncMock(), flow_store=AsyncMock(),
+        rag=AsyncMock(),
+        flow_store=AsyncMock(),
     )
 
 
@@ -29,16 +30,45 @@ async def test_explicit_human_request_routes_escalate():
     assert res.action == "route" and res.routed_to == "escalate"
 
 
-async def test_ambiguous_message_clarifies():
-    with patch("agent_customer_support.agents.triage.complete_text",
-               return_value='{"action":"clarify","question":"Bạn muốn làm gì cụ thể?"}'):
+async def test_ambiguous_message_still_routes_to_knowledge():
+    """Triage no longer clarifies — a vague message routes to knowledge, which owns
+    clarification now that it has the RAG (and screenshot) context to do it well."""
+    with patch(
+        "agent_customer_support.agents.triage.complete_text", return_value='{"target":"knowledge"}'
+    ):
         res = await TriageAgent().run(_ctx("phần mềm có vấn đề"))
-    assert res.action == "reply"
-    assert "cụ thể" in res.reply
+    assert res.action == "route" and res.routed_to == "knowledge"
 
 
 async def test_clear_intent_routes_knowledge():
-    with patch("agent_customer_support.agents.triage.complete_text",
-               return_value='{"action":"route","target":"knowledge"}'):
+    with patch(
+        "agent_customer_support.agents.triage.complete_text", return_value='{"target":"knowledge"}'
+    ):
         res = await TriageAgent().run(_ctx("cách tạo phiếu yêu cầu thử nghiệm?"))
     assert res.action == "route" and res.routed_to == "knowledge"
+
+
+async def test_triage_passes_full_history_on_followup():
+    """Triage sends the full conversation (not just ctx.message) so it can route a
+    terse follow-up using the context of the turns before it."""
+    from agent_customer_support.models import Turn
+
+    ctx = _ctx("màn hình trắng")
+    ctx.conversation.turns = [
+        Turn(role="user", content="module thanh toán bị lỗi"),
+        Turn(role="assistant", content="Lỗi gì vậy bạn?"),
+    ]
+    captured: dict = {}
+
+    def fake_complete(*, messages, system, model=None):
+        captured["messages"] = messages
+        return '{"target":"knowledge"}'
+
+    with patch("agent_customer_support.agents.triage.complete_text", side_effect=fake_complete):
+        await TriageAgent().run(ctx)
+
+    # should have 3 messages: 2 prior turns + current
+    assert len(captured["messages"]) == 3
+    assert captured["messages"][0]["role"] == "user"
+    assert captured["messages"][1]["role"] == "assistant"
+    assert captured["messages"][2]["content"] == "màn hình trắng"

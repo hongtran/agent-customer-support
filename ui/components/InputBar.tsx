@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Attachment } from "@/lib/api";
 
 interface Props {
@@ -20,6 +20,14 @@ export default function InputBar({ onSend, disabled }: Props) {
   const [value, setValue] = useState("");
   const [pending, setPending] = useState<Attachment[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+  }, [value]);
 
   const submit = () => {
     const text = value.trim();
@@ -27,6 +35,7 @@ export default function InputBar({ onSend, disabled }: Props) {
     onSend(text, pending);
     setValue("");
     setPending([]);
+    if (textareaRef.current) textareaRef.current.style.height = "auto";
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -40,7 +49,6 @@ export default function InputBar({ onSend, disabled }: Props) {
       }))
     );
     setPending((prev) => [...prev, ...converted]);
-    // reset so the same file can be re-selected if removed
     e.target.value = "";
   };
 
@@ -87,12 +95,14 @@ export default function InputBar({ onSend, disabled }: Props) {
           📎
         </button>
         <textarea
+          ref={textareaRef}
           rows={1}
           value={value}
           onChange={(e) => setValue(e.target.value)}
           disabled={disabled}
           placeholder="Type a message…"
-          className="flex-1 resize-none rounded-xl border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-50"
+          className="flex-1 resize-none overflow-y-auto rounded-xl border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-50"
+          style={{ maxHeight: "120px" }}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();

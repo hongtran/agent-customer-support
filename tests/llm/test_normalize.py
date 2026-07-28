@@ -1,5 +1,6 @@
 from agent_customer_support.llm.normalize import (
-    to_anthropic_content, to_openai_content,
+    to_anthropic_content,
+    to_openai_content,
 )
 from agent_customer_support.models import Attachment
 

@@ -3,6 +3,7 @@ import re
 
 from agent_customer_support.agents.context import TurnContext
 from agent_customer_support.agents.prompts import TRIAGE_PROMPT
+from agent_customer_support.config import get_settings
 from agent_customer_support.llm import complete_text
 from agent_customer_support.models import AgentResult
 
@@ -20,17 +21,17 @@ class TriageAgent:
             return AgentResult(action="route", routed_to="escalate")
 
         raw = complete_text(
-            messages=[{"role": "user", "content": ctx.message}],
+            messages=ctx.as_messages(),
             system=TRIAGE_PROMPT,
+            model=get_settings().model_for("triage"),
         )
         try:
             data = json.loads(raw)
         except (json.JSONDecodeError, TypeError):
-            data = {"action": "route", "target": "knowledge"}  # fail-safe default
+            data = {"target": "knowledge"}  # fail-safe default
 
-        if data.get("action") == "clarify":
-            return AgentResult(action="reply", reply=data.get("question", ""))
-
+        # Triage is route-only: clarification is owned by KnowledgeAgent, which has
+        # the RAG context (and screenshots) needed to ask a useful follow-up.
         target = data.get("target", "knowledge")
         if target not in ("knowledge", "flow", "escalate"):
             target = "knowledge"

@@ -63,9 +63,7 @@ def trace(
     try:
         from langfuse import propagate_attributes
 
-        attr_cm = propagate_attributes(
-            session_id=session_id, user_id=user_id, tags=tags
-        )
+        attr_cm = propagate_attributes(session_id=session_id, user_id=user_id, tags=tags)
         span_cm = client.start_as_current_observation(
             name=name, as_type="span", input=input, metadata=metadata
         )

@@ -24,8 +24,14 @@ export default function Home() {
   };
 
   const handleSend = async (text: string, attachments: Attachment[]) => {
-    const userContent = text + (attachments.length > 0 ? ` 📎 ${attachments.length} image${attachments.length > 1 ? "s" : ""}` : "");
-    setMessages((prev) => [...prev, { role: "user", content: userContent }]);
+    setMessages((prev) => [
+      ...prev,
+      {
+        role: "user",
+        content: text,
+        attachments: attachments.length > 0 ? attachments.map((a) => ({ media_type: a.media_type })) : undefined,
+      },
+    ]);
     setLoading(true);
     try {
       const result = await sendMessage({

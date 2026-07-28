@@ -70,8 +70,8 @@ class RagClient:
 
             # Threshold; fall back to floor so callers always get the best available.
             above = [(p, p.score) for p in points if p.score >= score_threshold]
-            if not above:
-                above = [(p, p.score) for p in points if p.score >= MIN_SCORE_THRESHOLD]
+            # if not above:
+            #     above = [(p, p.score) for p in points if p.score >= MIN_SCORE_THRESHOLD]
 
             # doc_type AND application filter; silently relax if it removes everything.
             if doc_type or applications:

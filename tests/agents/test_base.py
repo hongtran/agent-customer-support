@@ -2,7 +2,10 @@ from unittest.mock import AsyncMock
 from agent_customer_support.agents.context import TurnContext
 from agent_customer_support.agents.base import Agent
 from agent_customer_support.models import (
-    AgentResult, CustomerProfile, SessionState, Conversation,
+    AgentResult,
+    CustomerProfile,
+    SessionState,
+    Conversation,
 )
 
 

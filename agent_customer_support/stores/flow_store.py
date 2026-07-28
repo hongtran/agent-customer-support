@@ -28,6 +28,6 @@ class FlowStore:
             res = await table.scan()
         return [Flow.model_validate(i) for i in res.get("Items", [])]
 
-    async def list_for_modules(self, modules: list[str]) -> list[Flow]:
-        mods = set(modules)
-        return [f for f in await self.list_all() if f.module in mods]
+    async def list_for_applications(self, applications: list[str]) -> list[Flow]:
+        apps = set(applications)
+        return [f for f in await self.list_all() if f.application in apps]

@@ -31,7 +31,7 @@ app = FastAPI(title="CenLab Support Agent", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
-    allow_methods=["POST", "GET"],
+    allow_methods=["POST", "GET", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["Content-Type", "X-Admin-Token"],
 )
 

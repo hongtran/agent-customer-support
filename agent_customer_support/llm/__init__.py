@@ -13,12 +13,14 @@ from agent_customer_support.observability import tracing
 @lru_cache
 def _anthropic_client():
     from anthropic import Anthropic
+
     return Anthropic()  # reads ANTHROPIC_API_KEY from env
 
 
 @lru_cache
 def _openai_client():
     from openai import OpenAI
+
     return OpenAI()  # reads OPENAI_API_KEY from env
 
 
@@ -27,24 +29,38 @@ def _is_anthropic(model: str) -> bool:
 
 
 def complete_with_tools(
-    *, messages: list[dict], tools: list[dict], system: str | None = None
+    *,
+    messages: list[dict],
+    tools: list[dict],
+    system: str | list[dict] | None = None,
+    model: str | None = None,
 ) -> dict:
-    model = get_settings().agent_model
+    model = model or get_settings().agent_model
     with tracing.generation("llm", model=model, input=messages) as gen:
         if _is_anthropic(model):
             out = anthropic_complete_with_tools(
-                client=_anthropic_client(), model=model,
-                messages=messages, tools=tools, system=system,
+                client=_anthropic_client(),
+                model=model,
+                messages=messages,
+                tools=tools,
+                system=system,
             )
         else:
             out = openai_complete_with_tools(
-                client=_openai_client(), model=model,
-                messages=messages, tools=tools, system=system,
+                client=_openai_client(),
+                model=model,
+                messages=messages,
+                tools=tools,
+                system=system,
             )
         gen.update(output=out.get("text"), usage_details=out.get("usage"))
         return out
 
 
-def complete_text(messages: list[dict], system: str | None = None) -> str:
-    out = complete_with_tools(messages=messages, tools=[], system=system)
+def complete_text(
+    messages: list[dict],
+    system: str | list[dict] | None = None,
+    model: str | None = None,
+) -> str:
+    out = complete_with_tools(messages=messages, tools=[], system=system, model=model)
     return out.get("text") or ""

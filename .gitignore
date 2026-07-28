@@ -8,3 +8,19 @@ __pycache__/
 .ruff_cache/
 dist/
 *.egg-info/
+
+# OS
+.DS_Store
+
+# Node / Next.js (ui/ has its own .gitignore for build output)
+node_modules/
+
+# Editor / tool state
+.idea/
+.vscode/
+.agents/
+.playwright-mcp/
+.lavish/
+scripts/
+seeds/
+.superpowers/

@@ -250,7 +250,7 @@ async def run_eval() -> None:
     await reg.put(CustomerProfile(
         customer_id="eval_user",
         name="EvalUser",
-        enabled_modules=["yeu-cau-thu-nghiem", "xet-nghiem"],
+        enabled_applications=["yeu-cau-thu-nghiem", "xet-nghiem"],
     ))
 
     agent = Coordinator()

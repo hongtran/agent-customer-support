@@ -16,14 +16,24 @@ def to_openai_tools(tool_defs: list[dict]) -> list[dict]:
 
 
 def openai_complete_with_tools(
-    *, client, model: str, messages: list[dict],
-    tools: list[dict], system: str | None, max_tokens: int = 5000,
+    *,
+    client,
+    model: str,
+    messages: list[dict],
+    tools: list[dict],
+    system: str | list[dict] | None,
+    max_tokens: int = 5000,
 ) -> dict:
     msgs = list(messages)
     if system:
+        # Anthropic-style block lists (used for prompt caching) carry no meaning to
+        # OpenAI — flatten to plain text. The concatenation order is preserved, so the
+        # static prefix stays stable and OpenAI's automatic prefix caching still applies.
+        if isinstance(system, list):
+            system = "\n\n".join(b["text"] for b in system if b.get("type") == "text")
         msgs = [{"role": "system", "content": system}, *msgs]
 
-    kwargs: dict = {"model": model, "messages": msgs, "max_tokens": max_tokens}
+    kwargs: dict = {"model": model, "messages": msgs, "max_tokens": max_tokens, "temperature": 0.5}
     if tools:
         kwargs["tools"] = to_openai_tools(tools)
 
@@ -32,18 +42,21 @@ def openai_complete_with_tools(
     msg = choice.message
 
     tool_calls: list[dict] = []
-    for tc in (msg.tool_calls or []):
-        tool_calls.append({
-            "id": tc.id,
-            "name": tc.function.name,
-            "input": json.loads(tc.function.arguments or "{}"),
-        })
+    for tc in msg.tool_calls or []:
+        tool_calls.append(
+            {
+                "id": tc.id,
+                "name": tc.function.name,
+                "input": json.loads(tc.function.arguments or "{}"),
+            }
+        )
 
     stop_reason = "tool_use" if tool_calls else choice.finish_reason
     usage = getattr(resp, "usage", None)
     usage_details = (
         {"input": usage.prompt_tokens, "output": usage.completion_tokens}
-        if usage is not None else None
+        if usage is not None
+        else None
     )
     return {
         "stop_reason": stop_reason,

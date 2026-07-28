@@ -19,7 +19,7 @@ class RequestBacklog:
         customer_id: str,
         type: Literal["feature", "bug"],
         summary: str,
-        module: str | None = None,
+        application: str | None = None,
         transcript: str = "",
     ) -> RequestRecord:
         rec = RequestRecord(
@@ -27,7 +27,7 @@ class RequestBacklog:
             customer_id=customer_id,
             type=type,
             summary=summary,
-            module=module,
+            application=application,
             transcript=transcript,
         )
         async with get_resource() as ddb:

@@ -110,7 +110,7 @@ async def main() -> None:
     await reg.put(CustomerProfile(
         customer_id="ttp",
         name="TTP",
-        enabled_modules=["yeu-cau-thu-nghiem", "xet-nghiem"],
+        enabled_applications=["yeu-cau-thu-nghiem", "xet-nghiem"],
     ))
 
     agent   = Coordinator()

@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     # Per-agent model overrides — default to agent_model if unset
     triage_model: str | None = "gpt-4o-mini"
     knowledge_model: str | None = "gpt-4o"
-    knowledge_contextualize_model: str | None = "gpt-4o"
+    knowledge_contextualize_model: str | None = "gpt-4o-mini"
     verification_model: str | None = "gpt-4o-mini"
     flow_model: str | None = "gpt-4o-mini"
 
