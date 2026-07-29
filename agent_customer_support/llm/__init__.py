@@ -35,8 +35,14 @@ def complete_with_tools(
     system: str | list[dict] | None = None,
     model: str | None = None,
 ) -> dict:
-    model = model or get_settings().agent_model
-    with tracing.generation("llm", model=model, input=messages) as gen:
+    cfg = get_settings()
+    model = model or cfg.agent_model
+    with tracing.generation(
+        "llm",
+        model=model,
+        input=messages,
+        metadata={"environment": cfg.environment, "reasoning_effort": cfg.reasoning_effort},
+    ) as gen:
         if _is_anthropic(model):
             out = anthropic_complete_with_tools(
                 client=_anthropic_client(),
@@ -52,6 +58,8 @@ def complete_with_tools(
                 messages=messages,
                 tools=tools,
                 system=system,
+                max_tokens=cfg.max_output_tokens,
+                reasoning_effort=cfg.reasoning_effort,
             )
         gen.update(output=out.get("text"), usage_details=out.get("usage"))
         return out

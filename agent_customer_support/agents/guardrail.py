@@ -1,6 +1,7 @@
 import json
 
 from agent_customer_support.agents.prompts import GUARDRAIL_OUTPUT_PROMPT
+from agent_customer_support.config import get_settings
 from agent_customer_support.llm import complete_text
 
 MAX_INPUT_CHARS = 5000
@@ -21,6 +22,7 @@ class GuardrailAgent:
         raw = complete_text(
             messages=[{"role": "user", "content": reply}],
             system=GUARDRAIL_OUTPUT_PROMPT,
+            model=get_settings().model_for("guardrail"),
         )
         try:
             data = json.loads(raw)

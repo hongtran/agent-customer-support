@@ -50,6 +50,8 @@ Every agent receives a `TurnContext` (`agents/context.py`) and returns `AgentRes
 
 `llm/__init__.py` exports `complete_with_tools` and `complete_text` — these are the only LLM call sites. Model routing is automatic: model names containing `"claude"` use the Anthropic provider; everything else uses OpenAI. Per-agent model overrides are configured in `Settings` (`config.py`) and accessed via `settings.model_for("triage")` etc.
 
+The OpenAI provider builds request params per model family (`llm/providers/openai_provider.py`): reasoning models (`gpt-5*`, `o1/o3/o4*`) get `max_completion_tokens` + `reasoning_effort` and **no** `temperature`; older models keep `max_tokens` + `temperature=0.5`. The facade resolves the reasoning profile once from `Settings` and passes it down, so providers stay pure functions of their arguments. Effort and the token ceiling are enforced by `ENVIRONMENT` alone — `dev` → `low`/4000, `prod` → `high`/8000 (`_REASONING_EFFORT_BY_ENV` in `config.py`); there is no per-key override by design.
+
 ### Storage
 
 | Store | Backend | Purpose |
@@ -71,7 +73,8 @@ All tracing goes through `observability/tracing.py` (the only file that imports 
 ### Key env vars
 
 See `.env-example`. The important runtime ones:
-- `AGENT_MODEL` — default model (e.g. `gpt-4o-mini`, `claude-sonnet-4-6`)
+- `ENVIRONMENT` — `dev` (default) or `prod`; sets the enforced reasoning effort and output token ceiling. Prod deployments must inject it explicitly — the default is `dev`, i.e. `low` effort.
+- `AGENT_MODEL` — default model (e.g. `gpt-5.4-mini`, `claude-sonnet-4-6`); per-agent overrides via `TRIAGE_MODEL`, `KNOWLEDGE_MODEL`, `KNOWLEDGE_CONTEXTUALIZE_MODEL`, `VERIFICATION_MODEL`, `FLOW_MODEL`, `GUARDRAIL_MODEL`
 - `RAG_BASE_URL` — enterprise-llm-service endpoint for vector search (`/rag/query`)
 - `LANGFUSE_*` — optional tracing; leave blank to disable
 - `DYNAMODB_ENDPOINT_URL` — set to `http://localhost:8000` for local dev

@@ -2,7 +2,8 @@
 import os
 
 os.environ.setdefault("PRODUCT_COLLECTION", "cenlab")
-os.environ.setdefault("AGENT_MODEL", "gpt-4o-mini")
+os.environ.setdefault("ENVIRONMENT", "dev")
+os.environ.setdefault("AGENT_MODEL", "gpt-5.4-mini")
 os.environ.setdefault("DYNAMODB_ENDPOINT_URL", "http://localhost:8000")
 os.environ.setdefault("AWS_ACCESS_KEY_ID", "local")
 os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "local")

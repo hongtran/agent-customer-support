@@ -79,6 +79,54 @@ def test_surfaces_usage():
     assert out["usage"] == {"input": 9, "output": 5}
 
 
+def _text_client():
+    msg = SimpleNamespace(content="hello", tool_calls=None)
+    resp = SimpleNamespace(
+        choices=[SimpleNamespace(message=msg, finish_reason="stop")],
+        usage=SimpleNamespace(prompt_tokens=9, completion_tokens=5),
+    )
+    client = MagicMock()
+    client.chat.completions.create.return_value = resp
+    return client
+
+
+def test_reasoning_model_gets_reasoning_params():
+    client = _text_client()
+    openai_complete_with_tools(
+        client=client,
+        model="gpt-5.4-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[],
+        system=None,
+        max_tokens=8000,
+        reasoning_effort="high",
+    )
+    kwargs = client.chat.completions.create.call_args.kwargs
+    assert kwargs["max_completion_tokens"] == 8000
+    assert kwargs["reasoning_effort"] == "high"
+    # reasoning models reject any temperature other than the default
+    assert "temperature" not in kwargs
+    assert "max_tokens" not in kwargs
+
+
+def test_legacy_model_keeps_chat_params():
+    client = _text_client()
+    openai_complete_with_tools(
+        client=client,
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[],
+        system=None,
+        max_tokens=8000,
+        reasoning_effort="high",
+    )
+    kwargs = client.chat.completions.create.call_args.kwargs
+    assert kwargs["max_tokens"] == 8000
+    assert kwargs["temperature"] == 0.5
+    assert "reasoning_effort" not in kwargs
+    assert "max_completion_tokens" not in kwargs
+
+
 def test_usage_none_safe():
     msg = SimpleNamespace(content="hello", tool_calls=None)
     resp = SimpleNamespace(

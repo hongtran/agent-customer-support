@@ -84,7 +84,8 @@ Tests use DynamoDB Local + `fakeredis` — no real AWS credentials needed. `conf
 
 See `.env-example` for the full list. The important runtime ones:
 
-- `AGENT_MODEL` — default model (e.g. `gpt-4o-mini`, `claude-sonnet-4-6`)
+- `ENVIRONMENT` — `dev` (default) or `prod`. Sets the enforced OpenAI reasoning profile: `dev` → `reasoning_effort=low`, 4000 max output tokens; `prod` → `high`, 8000. There is no per-key override — the Dockerfile ships no `ENV` defaults, so a prod deployment must inject `ENVIRONMENT=prod` in its task definition / compose override or it will silently run at `low` effort.
+- `AGENT_MODEL` — default model (e.g. `gpt-5.4-mini`, `claude-sonnet-4-6`); override per agent with `TRIAGE_MODEL`, `KNOWLEDGE_MODEL`, `KNOWLEDGE_CONTEXTUALIZE_MODEL`, `VERIFICATION_MODEL`, `FLOW_MODEL`, `GUARDRAIL_MODEL`
 - `RAG_BASE_URL` / `QDRANT_ENDPOINT` — vector search backend for RAG
 - `LANGFUSE_*` — optional tracing; leave blank to disable
 - `DYNAMODB_ENDPOINT_URL` — set to `http://localhost:8000` for local dev

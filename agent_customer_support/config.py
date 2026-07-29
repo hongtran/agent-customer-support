@@ -1,9 +1,26 @@
 from functools import lru_cache
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+Environment = Literal["dev", "prod"]
+ReasoningEffort = Literal["minimal", "low", "medium", "high"]
+
+# Enforced per-environment reasoning profile. Deliberately not overridable by env
+# vars: prod always reasons hard, dev always stays cheap and fast.
+_REASONING_EFFORT_BY_ENV: dict[str, ReasoningEffort] = {"dev": "low", "prod": "high"}
+
+# On reasoning models the cap covers reasoning tokens *plus* visible output, so it
+# has to sit well above the old 5000 — otherwise a high-effort turn can burn the
+# whole budget on reasoning and return empty text.
+_MAX_OUTPUT_TOKENS_BY_ENV: dict[str, int] = {"dev": 4000, "prod": 8000}
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    # Deployment environment — drives the enforced reasoning profile below.
+    environment: Environment = "dev"
 
     # RAG (Qdrant read path)
     qdrant_endpoint: str = "http://localhost:6333"
@@ -14,17 +31,15 @@ class Settings(BaseSettings):
     product_collection: str = "cenlab"
     qa_collection: str = "cenlab_qa"
     qa_lead_threshold: float = 0.85
-    agent_model: str = "gpt-4o-mini"
+    agent_model: str = "gpt-5.4-mini"
 
     # Per-agent model overrides — default to agent_model if unset
-    triage_model: str | None = "gpt-4o-mini"
-    knowledge_model: str | None = "gpt-4o"
-    knowledge_contextualize_model: str | None = "gpt-4o-mini"
-    verification_model: str | None = "gpt-4o-mini"
-    flow_model: str | None = "gpt-4o-mini"
-
-    def model_for(self, agent: str) -> str:
-        return getattr(self, f"{agent}_model", None) or self.agent_model
+    triage_model: str | None = "gpt-5.4-mini"
+    knowledge_model: str | None = "gpt-5.6-luna"
+    knowledge_contextualize_model: str | None = "gpt-5.4-mini"
+    verification_model: str | None = "gpt-5.4-mini"
+    flow_model: str | None = "gpt-5.4-mini"
+    guardrail_model: str | None = "gpt-5.4-mini"
 
     dynamodb_endpoint_url: str | None = None
     dynamodb_auto_create_tables: bool = True
@@ -54,6 +69,19 @@ class Settings(BaseSettings):
     langfuse_public_key: str | None = None
     langfuse_secret_key: str | None = None
     langfuse_host: str = "https://cloud.langfuse.com"
+
+    def model_for(self, agent: str) -> str:
+        return getattr(self, f"{agent}_model", None) or self.agent_model
+
+    @property
+    def reasoning_effort(self) -> ReasoningEffort:
+        """Reasoning effort for OpenAI reasoning models — fixed by environment."""
+        return _REASONING_EFFORT_BY_ENV[self.environment]
+
+    @property
+    def max_output_tokens(self) -> int:
+        """Output token ceiling (reasoning + visible text) — fixed by environment."""
+        return _MAX_OUTPUT_TOKENS_BY_ENV[self.environment]
 
 
 @lru_cache

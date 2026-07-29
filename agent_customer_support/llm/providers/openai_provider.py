@@ -1,5 +1,16 @@
 import json
 
+# Reasoning-family models: they take `max_completion_tokens` + `reasoning_effort`
+# and reject any `temperature` other than the default.
+_REASONING_MODEL_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+
+_DEFAULT_MAX_TOKENS = 5000
+_DEFAULT_REASONING_MAX_TOKENS = 8000
+
+
+def _is_reasoning_model(model: str) -> bool:
+    return model.startswith(_REASONING_MODEL_PREFIXES)
+
 
 def to_openai_tools(tool_defs: list[dict]) -> list[dict]:
     return [
@@ -22,7 +33,8 @@ def openai_complete_with_tools(
     messages: list[dict],
     tools: list[dict],
     system: str | list[dict] | None,
-    max_tokens: int = 5000,
+    max_tokens: int | None = None,
+    reasoning_effort: str | None = None,
 ) -> dict:
     msgs = list(messages)
     if system:
@@ -33,7 +45,15 @@ def openai_complete_with_tools(
             system = "\n\n".join(b["text"] for b in system if b.get("type") == "text")
         msgs = [{"role": "system", "content": system}, *msgs]
 
-    kwargs: dict = {"model": model, "messages": msgs, "max_tokens": max_tokens, "temperature": 0.5}
+    kwargs: dict = {"model": model, "messages": msgs}
+    if _is_reasoning_model(model):
+        # The cap counts reasoning tokens too, and temperature is not accepted.
+        kwargs["max_completion_tokens"] = max_tokens or _DEFAULT_REASONING_MAX_TOKENS
+        if reasoning_effort:
+            kwargs["reasoning_effort"] = reasoning_effort
+    else:
+        kwargs["max_tokens"] = max_tokens or _DEFAULT_MAX_TOKENS
+        kwargs["temperature"] = 0.5
     if tools:
         kwargs["tools"] = to_openai_tools(tools)
 
