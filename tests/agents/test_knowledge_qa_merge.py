@@ -23,8 +23,9 @@ def _ctx(applications=None):
 def _patch_compose(monkeypatch, agent):
     cap = {}
 
-    async def fake_compose(question, passages, transcript, cfg, allow_clarify=True,
-                           qa_passages=None, qa_leads=False):
+    async def fake_compose(
+        question, passages, transcript, cfg, allow_clarify=True, qa_passages=None, qa_leads=False
+    ):
         cap["passages"] = passages
         cap["qa_passages"] = qa_passages
         cap["qa_leads"] = qa_leads
@@ -37,9 +38,13 @@ def _patch_compose(monkeypatch, agent):
 
 def _search_dispatch(qa_result, product_result=None):
     cfg = get_settings()
-    product_result = product_result or {"passages": ["guide"], "citations": ["g1"], "top_confidence": 0.5}
+    product_result = product_result or {
+        "passages": ["guide"],
+        "citations": ["g1"],
+        "top_confidence": 0.5,
+    }
 
-    async def search(query, collection, applications=None):
+    async def search(query, collection, applications=None, **kwargs):
         if collection == cfg.qa_collection:
             if isinstance(qa_result, Exception):
                 raise qa_result
@@ -54,9 +59,11 @@ async def test_qa_leads_when_above_threshold(monkeypatch):
     cap = _patch_compose(monkeypatch, agent)
     ctx = _ctx()
     ctx.rag = type("R", (), {})()
-    ctx.rag.search = AsyncMock(side_effect=_search_dispatch(
-        {"passages": ["cs answer"], "citations": ["abc"], "top_confidence": 0.95}
-    ))
+    ctx.rag.search = AsyncMock(
+        side_effect=_search_dispatch(
+            {"passages": ["cs answer"], "citations": ["abc"], "top_confidence": 0.95}
+        )
+    )
     res = await agent.run(ctx)
     assert cap["qa_passages"] == ["cs answer"]
     assert cap["qa_leads"] is True
@@ -69,9 +76,11 @@ async def test_qa_supplementary_when_below_threshold(monkeypatch):
     cap = _patch_compose(monkeypatch, agent)
     ctx = _ctx()
     ctx.rag = type("R", (), {})()
-    ctx.rag.search = AsyncMock(side_effect=_search_dispatch(
-        {"passages": ["cs answer"], "citations": ["abc"], "top_confidence": 0.4}
-    ))
+    ctx.rag.search = AsyncMock(
+        side_effect=_search_dispatch(
+            {"passages": ["cs answer"], "citations": ["abc"], "top_confidence": 0.4}
+        )
+    )
     await agent.run(ctx)
     assert cap["qa_passages"] == ["cs answer"]
     assert cap["qa_leads"] is False
@@ -82,7 +91,9 @@ async def test_qa_search_failure_degrades_to_product_only(monkeypatch):
     cap = _patch_compose(monkeypatch, agent)
     ctx = _ctx()
     ctx.rag = type("R", (), {})()
-    ctx.rag.search = AsyncMock(side_effect=_search_dispatch(RuntimeError("no collection")))
+    # ValueError is what Qdrant local mode raises for a missing collection; the
+    # narrowed except in _safe_qa_search catches store failures, not RuntimeError.
+    ctx.rag.search = AsyncMock(side_effect=_search_dispatch(ValueError("no collection")))
     await agent.run(ctx)  # must not raise
     assert cap["qa_passages"] == []
     assert cap["qa_leads"] is False
@@ -94,11 +105,15 @@ async def test_applications_filter_passed_to_qa_search(monkeypatch):
     _patch_compose(monkeypatch, agent)
     ctx = _ctx(applications=["Lab"])
     ctx.rag = type("R", (), {})()
-    ctx.rag.search = AsyncMock(side_effect=_search_dispatch(
-        {"passages": [], "citations": [], "top_confidence": 0.0}
-    ))
+    ctx.rag.search = AsyncMock(
+        side_effect=_search_dispatch({"passages": [], "citations": [], "top_confidence": 0.0})
+    )
     await agent.run(ctx)
     cfg = get_settings()
     ctx.rag.search.assert_any_await(
-        "q-standalone", collection=cfg.qa_collection, applications=["Lab"]
+        "q-standalone",
+        collection=cfg.qa_collection,
+        applications=["Lab"],
+        top_k=1,
+        score_threshold=cfg.qa_lead_threshold,
     )

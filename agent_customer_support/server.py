@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from agent_customer_support.channels.widget import router as widget_router, get_agent
 from agent_customer_support.channels.admin import router as admin_router
+from agent_customer_support.channels.deps import get_qa_indexer
 from agent_customer_support.config import get_settings
 from agent_customer_support.stores.qa_store import QAStore
 from agent_customer_support.observability import tracing
@@ -17,11 +18,28 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    for store in (CustomerRegistry(), ConversationStore(), FlowStore(), RequestBacklog(), QAStore()):
+    for store in (
+        CustomerRegistry(),
+        ConversationStore(),
+        FlowStore(),
+        RequestBacklog(),
+        QAStore(),
+    ):
         try:
             await store.init()
         except Exception as exc:
             logger.warning("Store init skipped (%s): %s", type(store).__name__, exc)
+    # The qa collection needs its keyword payload indexes before anything can filter
+    # on them — Qdrant runs strict mode (`unindexed_filtering_retrieve=False`), so an
+    # unindexed filter is a hard 400, not a slow scan. This has to happen at startup
+    # rather than only in QAIndexer.upsert: a server that just answers questions never
+    # calls upsert, so the read path would 400 on every turn until a CS approval
+    # happened to create the indexes. Idempotent, and shares the lru_cached instance
+    # with the admin path so the first approve doesn't redo the round trip.
+    try:
+        await get_qa_indexer().ensure_collection()
+    except Exception as exc:
+        logger.warning("QA index init skipped: %s", exc)
     yield
     # Flush any buffered traces on shutdown (no-op when tracing is disabled).
     tracing.flush()

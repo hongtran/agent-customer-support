@@ -1,6 +1,8 @@
 import logging
 import re
 
+from qdrant_client.http.exceptions import ApiException
+
 from agent_customer_support.agents.context import TurnContext
 from agent_customer_support.agents.prompts import (
     KNOWLEDGE_CONTEXTUALIZE_PROMPT,
@@ -149,14 +151,24 @@ class KnowledgeAgent:
     async def _safe_qa_search(
         self, ctx: TurnContext, query: str, applications: list[str] | None, cfg: Settings
     ) -> dict:
-        """Search the curated Q&A collection, degrading to an empty result on any
-        error. The qa collection does not exist until the first CS approval, so a
-        missing collection (or any Qdrant error) must never break the guide path."""
+        """Search the curated Q&A collection, degrading to an empty result when the
+        store is unavailable. The qa collection does not exist until the first CS
+        approval, so a missing collection (or a Qdrant outage) must never break the
+        guide path.
+
+        Only store-level failures are caught: ApiException covers Qdrant HTTP and
+        connection errors, ValueError is what local/in-memory mode raises for a
+        missing collection. A bug in our own call would previously be swallowed here
+        and silently degrade every answer, so it is left to propagate."""
         try:
             return await ctx.rag.search(
-                query, collection=cfg.qa_collection, applications=applications, top_k=1, score_threshold=cfg.qa_lead_threshold
+                query,
+                collection=cfg.qa_collection,
+                # applications=applications,
+                top_k=1,
+                score_threshold=cfg.qa_lead_threshold,
             )
-        except Exception as exc:  # noqa: BLE001 - degrade, never break the answer
+        except (ApiException, ValueError) as exc:
             logger.warning("qa search failed, using product-only: %s", exc)
             return {"passages": [], "citations": [], "top_confidence": 0.0}
 
@@ -189,7 +201,9 @@ class KnowledgeAgent:
 
         qa_res = await self._safe_qa_search(ctx, query, applications, cfg)
         qa_passages = qa_res.get("passages", []) or []
-        qa_leads = bool(qa_passages) and (qa_res.get("top_confidence") or 0.0) >= cfg.qa_lead_threshold
+        qa_leads = (
+            bool(qa_passages) and (qa_res.get("top_confidence") or 0.0) >= cfg.qa_lead_threshold
+        )
         qa_citations = qa_res.get("citations", []) or []
         if qa_citations:
             citations = citations + [f"qa:{c}" for c in qa_citations]

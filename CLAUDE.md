@@ -52,6 +52,16 @@ Every agent receives a `TurnContext` (`agents/context.py`) and returns `AgentRes
 
 The OpenAI provider builds request params per model family (`llm/providers/openai_provider.py`): reasoning models (`gpt-5*`, `o1/o3/o4*`) get `max_completion_tokens` + `reasoning_effort` and **no** `temperature`; older models keep `max_tokens` + `temperature=0.5`. The facade resolves the reasoning profile once from `Settings` and passes it down, so providers stay pure functions of their arguments. Effort and the token ceiling are enforced by `ENVIRONMENT` alone — `dev` → `low`/4000, `prod` → `high`/8000 (`_REASONING_EFFORT_BY_ENV` in `config.py`); there is no per-key override by design.
 
+### RAG
+
+`rag_client.py` reads Qdrant directly (no HTTP service in front of it). `_normalize_collection` maps the logical collection name from `Settings` to the physical `_v3` collection, mirroring enterprise-llm-service's `RagManager`. Embeddings go through `rag/embeddings.py` (Google `gemini-embedding-001`).
+
+Application scoping is a **hard, server-side Qdrant payload filter** (`_build_filter`) applied during the vector search, not a post-filter — so a rare application can't be squeezed out of the candidate set, and a scoped query never answers from another application's docs. One deliberate exception: a document with no `application` in its metadata (missing or `null`) is treated as **global** and stays visible to every customer, which is what keeps untagged Q&A records (`QARecord.application` is optional) reachable. Scoping is driven by `session.selected_applications`, not `CustomerProfile.enabled_applications`.
+
+**Application identifiers have two forms and the boundary matters.** Qdrant stores a **slug** (`lay_mau_quan_trac`); the rest of the stack uses **display names** (`Lấy mẫu - Quan trắc`) — `CustomerProfile.enabled_applications` holds names, `/widget/customers/{id}/applications` serves names, and the widget sends names back in `ChatRequest.applications`. `RagClient.search` translates via `applications.to_slugs` before it filters; filtering on a raw display name matches **nothing**. `applications.py` carries the canonical map, duplicated from enterprise-llm-service's `_APPLICATION_SLUGS` (`data_processing/extract_info_user_guide.py`) — keep them in sync. Note `seeds/flows` uses a third, kebab-case form; `to_slug` tolerates it. The `rag.search` span logs both `applications` and `applications_resolved` so a scoping miss is diagnosable from the trace.
+
+**Payload indexes are mandatory, not an optimisation.** The Qdrant deployment runs strict mode with `unindexed_filtering_retrieve=False`, so filtering on a key with no keyword payload index fails with a 400 — there is no fallback scan. The product collection already has indexes on `metadata.application`, `metadata.doc_type`, and `metadata.job_role` (created by enterprise-llm-service's `rag/indexing.py`). For the Q&A collection, `rag/qa_indexer.ensure_collection` creates them — deliberately on every process start, not only at collection creation, because that collection predates the indexes.
+
 ### Storage
 
 | Store | Backend | Purpose |
@@ -75,6 +85,6 @@ All tracing goes through `observability/tracing.py` (the only file that imports 
 See `.env-example`. The important runtime ones:
 - `ENVIRONMENT` — `dev` (default) or `prod`; sets the enforced reasoning effort and output token ceiling. Prod deployments must inject it explicitly — the default is `dev`, i.e. `low` effort.
 - `AGENT_MODEL` — default model (e.g. `gpt-5.4-mini`, `claude-sonnet-4-6`); per-agent overrides via `TRIAGE_MODEL`, `KNOWLEDGE_MODEL`, `KNOWLEDGE_CONTEXTUALIZE_MODEL`, `VERIFICATION_MODEL`, `FLOW_MODEL`, `GUARDRAIL_MODEL`
-- `RAG_BASE_URL` — enterprise-llm-service endpoint for vector search (`/rag/query`)
+- `QDRANT_ENDPOINT` / `QDRANT_API_KEY` — Qdrant instance backing RAG; `GOOGLE_API_KEY` for the embedding model (`EMBEDDING_MODEL`, default `gemini-embedding-001`)
 - `LANGFUSE_*` — optional tracing; leave blank to disable
 - `DYNAMODB_ENDPOINT_URL` — set to `http://localhost:8000` for local dev

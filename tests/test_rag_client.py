@@ -12,18 +12,20 @@ pytestmark = pytest.mark.asyncio
 COLLECTION = "cenlab"
 
 
+_OMIT = object()
+
+
 def _point(pid, vector, *, source_doc_id, doc_type="guide", application="Lab", text="noi dung"):
+    """Build a chunk point. Pass application=_OMIT to leave the key out of the
+    payload entirely (vs. application=None for an explicit null) — the global-document
+    filter has to handle both shapes."""
+    metadata = {"source_doc_id": source_doc_id, "doc_type": doc_type}
+    if application is not _OMIT:
+        metadata["application"] = application
     return models.PointStruct(
         id=pid,
         vector=vector,
-        payload={
-            "page_content": text,
-            "metadata": {
-                "source_doc_id": source_doc_id,
-                "doc_type": doc_type,
-                "application": application,
-            },
-        },
+        payload={"page_content": text, "metadata": metadata},
     )
 
 
@@ -70,19 +72,7 @@ async def test_threshold_keeps_only_scores_at_or_above_default():
     assert set(res["citations"]) == {"hdsd#1", "hdsd#2"}  # hdsd#3 below 0.6
 
 
-async def test_floor_relax_when_nothing_clears_threshold():
-    client = await _client_with(
-        [
-            _point(1, [0.6, 0.8], source_doc_id="hdsd#2"),
-            _point(2, [0.3, 0.9539392], source_doc_id="hdsd#3"),
-        ]
-    )
-    # threshold 0.9 clears nothing -> relax to 0.25 floor -> both (>=0.25) returned
-    res = await RagClient(client=client).search("q", collection=COLLECTION, score_threshold=0.9)
-    assert set(res["citations"]) == {"hdsd#2", "hdsd#3"}
-
-
-async def test_application_filter_then_silent_relax():
+async def test_application_filter_is_hard():
     client = await _client_with(
         [
             _point(1, [1.0, 0.0], source_doc_id="hdsd#1", application="Lab"),
@@ -92,11 +82,74 @@ async def test_application_filter_then_silent_relax():
     res = await RagClient(client=client).search("q", collection=COLLECTION, applications=["Lab"])
     assert set(res["citations"]) == {"hdsd#1"}
 
-    # filter that matches nothing is silently relaxed to unfiltered
+    # A filter matching nothing returns nothing — it is NOT relaxed to unfiltered.
+    # Another application's docs must never answer a scoped question.
     res2 = await RagClient(client=client).search(
         "q", collection=COLLECTION, applications=["DoesNotExist"]
     )
-    assert set(res2["citations"]) == {"hdsd#1", "hdsd#2"}
+    assert res2["citations"] == []
+    assert res2["passages"] == []
+    assert res2["top_confidence"] == 0.0
+
+
+async def test_display_name_from_ui_matches_slug_in_payload():
+    """Regression: the widget sends display names, Qdrant stores slugs.
+
+    Filtering on the raw display name matched zero documents — with a hard filter
+    that means every scoped question answered "no idea". search() must translate.
+    """
+    client = await _client_with(
+        [
+            _point(1, [1.0, 0.0], source_doc_id="hdsd#1", application="lay_mau_quan_trac"),
+            _point(2, [0.9, 0.4359], source_doc_id="hdsd#2", application="quan_ly_kho"),
+        ]
+    )
+    res = await RagClient(client=client).search(
+        "q", collection=COLLECTION, applications=["Lấy mẫu - Quan trắc"]
+    )
+    assert set(res["citations"]) == {"hdsd#1"}
+
+    # and the slug form keeps working, so existing callers are unaffected
+    res2 = await RagClient(client=client).search(
+        "q", collection=COLLECTION, applications=["lay_mau_quan_trac"]
+    )
+    assert set(res2["citations"]) == {"hdsd#1"}
+
+
+async def test_untagged_documents_are_global():
+    client = await _client_with(
+        [
+            _point(1, [1.0, 0.0], source_doc_id="hdsd#null", application=None),
+            _point(2, [1.0, 0.0], source_doc_id="hdsd#missing", application=_OMIT),
+            _point(3, [1.0, 0.0], source_doc_id="hdsd#other", application="Other"),
+        ]
+    )
+    res = await RagClient(client=client).search("q", collection=COLLECTION, applications=["Lab"])
+    # explicit null and a missing key both count as global; "Other" is still excluded
+    assert set(res["citations"]) == {"hdsd#null", "hdsd#missing"}
+
+
+async def test_doc_type_filter():
+    client = await _client_with(
+        [
+            _point(1, [1.0, 0.0], source_doc_id="hdsd#1", doc_type="guide"),
+            _point(2, [1.0, 0.0], source_doc_id="qa#1", doc_type="qa"),
+        ]
+    )
+    res = await RagClient(client=client).search("q", collection=COLLECTION, doc_type="qa")
+    assert set(res["citations"]) == {"qa#1"}
+
+
+async def test_nothing_clears_threshold_returns_empty():
+    client = await _client_with(
+        [
+            _point(1, [0.6, 0.8], source_doc_id="hdsd#2"),
+            _point(2, [0.3, 0.9539392], source_doc_id="hdsd#3"),
+        ]
+    )
+    res = await RagClient(client=client).search("q", collection=COLLECTION, score_threshold=0.9)
+    assert res["citations"] == []
+    assert res["top_confidence"] == 0.0
 
 
 async def test_dedup_keeps_highest_scoring_chunk_per_source():

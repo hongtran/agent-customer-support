@@ -1,12 +1,11 @@
 from typing import Any
 
-from qdrant_client import AsyncQdrantClient
+from qdrant_client import AsyncQdrantClient, models
 
+from agent_customer_support.applications import to_slugs
 from agent_customer_support.config import get_settings
 from agent_customer_support.observability import tracing
 from agent_customer_support.rag.embeddings import embed_query
-
-MIN_SCORE_THRESHOLD = 0.25
 
 
 def _meta(point: Any) -> dict:
@@ -34,6 +33,54 @@ def _normalize_collection(name: str) -> str:
     return name.replace("_v2", "") + "_v3"
 
 
+def _build_filter(doc_type: str | None, applications: list[str] | None) -> models.Filter | None:
+    """Server-side payload filter for the vector search.
+
+    Applied by Qdrant during retrieval, not after it. Filtering in Python meant
+    scoping only ever saw the top `limit` hits by similarity, so a rarely-matching
+    application could be squeezed out of the candidate set entirely.
+
+    langchain_qdrant nests chunk metadata under a `metadata` key, hence the
+    `metadata.<field>` paths.
+
+    `applications` must already be slug-normalised (see `search`).
+
+    Applications are a hard scope, with one deliberate exception: a document with
+    no `application` is global and stays visible to everyone. That covers shared
+    guides and Q&A records CS approved without tagging an application
+    (`QARecord.application` is optional).
+
+    NOTE: this Qdrant runs with strict mode (`unindexed_filtering_retrieve=False`),
+    so every key referenced here MUST have a keyword payload index or the query
+    fails with a 400 — it does not silently fall back to a scan.
+    """
+    must: list[models.Condition] = []
+    if doc_type:
+        must.append(
+            models.FieldCondition(key="metadata.doc_type", match=models.MatchValue(value=doc_type))
+        )
+    if applications:
+        must.append(
+            models.Filter(
+                should=[
+                    # MatchAny matches whether `application` is stored as a scalar
+                    # or a list, so this is safe against either payload shape.
+                    models.FieldCondition(
+                        key="metadata.application",
+                        match=models.MatchAny(any=applications),
+                    ),
+                    # is_empty covers a missing key / empty list, is_null an
+                    # explicit null — we don't assume which form the indexer wrote.
+                    models.IsEmptyCondition(
+                        is_empty=models.PayloadField(key="metadata.application")
+                    ),
+                    models.IsNullCondition(is_null=models.PayloadField(key="metadata.application")),
+                ]
+            )
+        )
+    return models.Filter(must=must) if must else None
+
+
 class RagClient:
     def __init__(self, client: AsyncQdrantClient | None = None) -> None:
         cfg = get_settings()
@@ -51,38 +98,32 @@ class RagClient:
         applications: list[str] | None = None,
     ) -> dict:
         resolved_collection = _normalize_collection(collection)
+        # Callers pass display names (the widget forwards whatever the UI showed);
+        # Qdrant stores slugs. Translate once here, before anything uses the value,
+        # so every retrieval path is scoped on values that can actually match.
+        resolved_applications = to_slugs(applications)
         with tracing.span(
             "rag.search",
             input={
                 "query": query,
                 "collection": resolved_collection,
-                "applications": applications or [],
+                "applications": resolved_applications or []
             },
         ) as sp:
             vec = await embed_query(query)
             resp = await self._client.query_points(
                 collection_name=resolved_collection,
                 query=vec,
+                # Over-fetch: the dedup below collapses chunks of the same source
+                # document, and several chunks of one document routinely occupy the
+                # top hits. Not related to filtering — Qdrant handles that now.
                 limit=top_k * 4,
+                query_filter=_build_filter(doc_type, resolved_applications),
                 with_payload=True,
             )
             points = resp.points
 
-            # Threshold; fall back to floor so callers always get the best available.
             above = [(p, p.score) for p in points if p.score >= score_threshold]
-            # if not above:
-            #     above = [(p, p.score) for p in points if p.score >= MIN_SCORE_THRESHOLD]
-
-            # doc_type AND application filter; silently relax if it removes everything.
-            if doc_type or applications:
-                filtered = [
-                    (p, s)
-                    for p, s in above
-                    if (not doc_type or _meta(p).get("doc_type") == doc_type)
-                    and (not applications or _meta(p).get("application") in applications)
-                ]
-                if filtered:
-                    above = filtered
 
             # Deduplicate: keep highest-scoring chunk per source document.
             best: dict[str, tuple[Any, float]] = {}

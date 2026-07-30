@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     embedding_model: str = "gemini-embedding-001"
     embedding_dim: int = 3072
     product_collection: str = "cenlab"
-    qa_collection: str = "cenlab_qa"
+    qa_collection: str = "cenlab_qa_dev"
     qa_lead_threshold: float = 0.85
     agent_model: str = "gpt-5.4-mini"
 
