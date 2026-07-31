@@ -3,10 +3,17 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from agent_customer_support.models import ChatRequest, ChatResponse, Conversation, CustomerProfile, QARecord
+from agent_customer_support.models import (
+    ChatRequest,
+    ChatResponse,
+    Conversation,
+    CustomerProfile,
+    QARecord,
+)
 from agent_customer_support.agents.coordinator import Coordinator
 from agent_customer_support.stores.customer_registry import CustomerRegistry
 from agent_customer_support.channels.deps import get_conversation_store, get_qa_store
+from agent_customer_support.config import get_settings
 from agent_customer_support.stores.conversation_store import ConversationStore
 from agent_customer_support.stores.qa_store import QAStore
 
@@ -20,6 +27,17 @@ def get_agent() -> Coordinator:
 
 @router.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, agent: Coordinator = Depends(get_agent)) -> ChatResponse:
+    # Size-check before anything else: an oversized upload should cost nothing, and
+    # everything downstream (S3, the LLM) is more expensive than this comparison.
+    # decoded_size is arithmetic on the base64 length, so the payload is never
+    # materialised just to measure it.
+    total = sum(a.decoded_size for a in req.attachments)
+    limit = get_settings().max_attachment_bytes
+    if total > limit:
+        raise HTTPException(
+            status_code=413,
+            detail=f"attachments total {total} bytes, limit is {limit}",
+        )
     return await agent.handle_turn(
         customer_id=req.customer_id,
         conversation_id=req.conversation_id,

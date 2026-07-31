@@ -1,3 +1,5 @@
+import logging
+
 from agent_customer_support.agents.context import TurnContext
 from agent_customer_support.agents.escalation import EscalationAgent
 from agent_customer_support.agents.flow import FlowAgent
@@ -8,18 +10,23 @@ from agent_customer_support.agents.verification import IssueVerificationAgent
 from agent_customer_support.escalation import Escalator
 from agent_customer_support.models import (
     AgentResult,
+    AttachmentRef,
     ChatResponse,
     CustomerProfile,
+    StoredAttachment,
     Turn,
 )
 from agent_customer_support.observability import tracing
 from agent_customer_support.rag_client import RagClient
+from agent_customer_support.stores.attachment_store import AttachmentStore
 from agent_customer_support.stores.conversation_store import ConversationStore
 from agent_customer_support.stores.customer_registry import CustomerRegistry
 from agent_customer_support.stores.flow_store import FlowStore
 from agent_customer_support.stores.request_backlog import RequestBacklog
 from agent_customer_support.stores.qa_store import QAStore
 from agent_customer_support.stores.session_store import SessionStore
+
+logger = logging.getLogger(__name__)
 
 _BLOCK_REPLY = (
     "Xin lỗi, mình chưa thể xử lý nội dung này. Bạn vui lòng nhập câu hỏi về phần mềm CenLab nhé."
@@ -34,6 +41,7 @@ class Coordinator:
         self.flow_store = FlowStore()
         self.backlog = RequestBacklog()
         self.qa_store = QAStore()
+        self.attachments = AttachmentStore()
         self.sessions = SessionStore()
         self.rag = RagClient()
         self.escalator = Escalator()
@@ -181,11 +189,13 @@ class Coordinator:
         new_session.conversation_id = ctx.session.conversation_id
         await self.sessions.save(new_session)
 
-        # Persist turns
+        # Persist turns. The user turn is built first so its id can key the S3 objects.
+        user_turn = Turn(role="user", content=ctx.message)
+        user_turn.attachments = await self._store_attachments(ctx, user_turn.id)
         await self.conversations.append(
             ctx.session.conversation_id,
             ctx.customer.customer_id,
-            Turn(role="user", content=ctx.message, attachments=ctx.attachments),
+            user_turn,
         )
         assistant_turn = Turn(role="assistant", content=result.reply)
         await self.conversations.append(
@@ -199,4 +209,36 @@ class Coordinator:
             escalated=result.escalated,
             citations=result.citations,
             message_id=assistant_turn.id,
+            attachments=await self._presign(user_turn.attachments),
         )
+
+    async def _store_attachments(self, ctx: TurnContext, turn_id: str) -> list[StoredAttachment]:
+        """Upload this turn's images to S3 and return their keys.
+
+        Never raises. By the time _finish runs, the reply has already been generated —
+        contextualize, retrieval and compose have all been paid for — so an S3 problem
+        must not turn a good answer into a 500. Losing a screenshot from the archive is
+        the strictly cheaper failure. (This is the same mistake that made the original
+        DynamoDB size error user-visible.)
+        """
+        if not ctx.attachments:
+            return []
+        try:
+            return [
+                await self.attachments.put(ctx.session.conversation_id, turn_id, i, a)
+                for i, a in enumerate(ctx.attachments)
+            ]
+        except Exception as exc:  # noqa: BLE001 - degrade, never break a generated reply
+            logger.warning("attachment upload failed, persisting turn without it: %s", exc)
+            return []
+
+    async def _presign(self, stored: list[StoredAttachment]) -> list[AttachmentRef]:
+        """Signed URLs so the widget can render what was just uploaded. Also
+        best-effort: a signing failure costs a thumbnail, not the answer."""
+        if not stored:
+            return []
+        try:
+            return [await self.attachments.presign(s) for s in stored]
+        except Exception as exc:  # noqa: BLE001 - degrade, never break a generated reply
+            logger.warning("presign failed, returning reply without image urls: %s", exc)
+            return []

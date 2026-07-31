@@ -107,7 +107,7 @@ class RagClient:
             input={
                 "query": query,
                 "collection": resolved_collection,
-                "applications": resolved_applications or []
+                "applications": resolved_applications or [],
             },
         ) as sp:
             vec = await embed_query(query)

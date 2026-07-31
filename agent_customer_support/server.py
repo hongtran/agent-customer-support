@@ -8,6 +8,7 @@ from agent_customer_support.channels.deps import get_qa_indexer
 from agent_customer_support.config import get_settings
 from agent_customer_support.stores.qa_store import QAStore
 from agent_customer_support.observability import tracing
+from agent_customer_support.stores.attachment_store import AttachmentStore
 from agent_customer_support.stores.customer_registry import CustomerRegistry
 from agent_customer_support.stores.conversation_store import ConversationStore
 from agent_customer_support.stores.flow_store import FlowStore
@@ -24,6 +25,7 @@ async def lifespan(app: FastAPI):
         FlowStore(),
         RequestBacklog(),
         QAStore(),
+        AttachmentStore(),
     ):
         try:
             await store.init()

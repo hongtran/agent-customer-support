@@ -41,7 +41,17 @@ export default function Home() {
         attachments: attachments.length > 0 ? attachments : undefined,
         applications: selectedApplications.length > 0 ? selectedApplications : undefined,
       });
-      setMessages((prev) => [...prev, { role: "agent", content: result.reply, messageId: result.message_id }]);
+      setMessages((prev) => {
+        const next = [...prev];
+        // The uploaded images belong to the user message we optimistically added
+        // above; the server only knows their presigned URLs now that it has stored
+        // them. Patch that message in place so the chips become real thumbnails.
+        if (result.attachments?.length) {
+          const i = next.findLastIndex((m) => m.role === "user");
+          if (i !== -1) next[i] = { ...next[i], attachments: result.attachments };
+        }
+        return [...next, { role: "agent", content: result.reply, messageId: result.message_id }];
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
       setMessages((prev) => [...prev, { role: "error", content: `Error: ${msg}` }]);

@@ -45,6 +45,17 @@ class Settings(BaseSettings):
     dynamodb_auto_create_tables: bool = True
     aws_region: str = "ap-southeast-1"
 
+    # Attachment storage (S3). Image bytes never go into DynamoDB — the conversation
+    # is one item and DynamoDB caps items at 400 KB. Set s3_endpoint_url to
+    # http://localhost:4566 for LocalStack; leave unset to hit real AWS.
+    s3_endpoint_url: str | None = None
+    s3_bucket_attachments: str = "agent-customer-support-attachments"
+    s3_auto_create_bucket: bool = True
+    s3_presign_expiry_seconds: int = 3600
+    # Rejected at the API boundary before any LLM spend. 5 MB sits near Anthropic's
+    # own per-image ceiling, so anything larger would fail downstream anyway.
+    max_attachment_bytes: int = 5 * 1024 * 1024
+
     redis_url: str = "redis://localhost:6379/0"
     session_ttl_seconds: int = 3600
 

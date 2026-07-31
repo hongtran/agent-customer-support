@@ -7,7 +7,10 @@ export interface Message {
   role: "user" | "agent" | "error";
   content: string;
   messageId?: string;
-  attachments?: { media_type: string }[];
+  // `url` is a presigned S3 link, filled in from the chat response. It is absent
+  // for the optimistic echo rendered before the request completes, so the chip
+  // below doubles as the pre-upload placeholder.
+  attachments?: { media_type: string; url?: string }[];
 }
 
 type FeedbackSignal = "up" | "down";
@@ -65,14 +68,24 @@ export default function MessageList({ messages, loading, onFeedbackDown }: Props
                 </div>
                 {msg.attachments && msg.attachments.length > 0 && (
                   <div className="flex flex-wrap gap-1 justify-end">
-                    {msg.attachments.map((att, j) => (
-                      <span
-                        key={j}
-                        className="flex items-center gap-1 rounded-lg border border-blue-300 bg-blue-50 text-blue-700 px-2 py-0.5 text-xs"
-                      >
-                        🖼 {att.media_type.replace("image/", "")}
-                      </span>
-                    ))}
+                    {msg.attachments.map((att, j) =>
+                      att.url ? (
+                        <a key={j} href={att.url} target="_blank" rel="noopener noreferrer">
+                          <img
+                            src={att.url}
+                            alt={`Ảnh đính kèm ${j + 1}`}
+                            className="max-h-48 max-w-full rounded-lg border border-blue-300 object-contain"
+                          />
+                        </a>
+                      ) : (
+                        <span
+                          key={j}
+                          className="flex items-center gap-1 rounded-lg border border-blue-300 bg-blue-50 text-blue-700 px-2 py-0.5 text-xs"
+                        >
+                          🖼 {att.media_type.replace("image/", "")}
+                        </span>
+                      ),
+                    )}
                   </div>
                 )}
               </div>

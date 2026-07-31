@@ -16,9 +16,18 @@ export interface ChatPayload {
   applications?: string[];
 }
 
+/** An uploaded image as the server hands it back: a presigned, expiring S3 URL. */
+export interface AttachmentRef {
+  kind: "image";
+  media_type: string;
+  url: string;
+}
+
 export interface ChatResult {
   reply: string;
   message_id?: string;
+  /** The images from the message just sent, now stored and signed for display. */
+  attachments?: AttachmentRef[];
 }
 
 export async function sendMessage(payload: ChatPayload): Promise<ChatResult> {
@@ -33,7 +42,7 @@ export async function sendMessage(payload: ChatPayload): Promise<ChatResult> {
   }
 
   const data = await res.json();
-  return { reply: data.reply, message_id: data.message_id };
+  return { reply: data.reply, message_id: data.message_id, attachments: data.attachments };
 }
 
 export async function getCustomerApplications(customerId: string): Promise<string[]> {

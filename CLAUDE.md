@@ -71,6 +71,17 @@ Application scoping is a **hard, server-side Qdrant payload filter** (`_build_fi
 | `CustomerRegistry` | DynamoDB | Customer profiles & enabled modules |
 | `FlowStore` | DynamoDB | Flow definitions (seeded via `scripts/import_flows.py`) |
 | `RequestBacklog` | DynamoDB | Bug/feature/how-to records logged on escalation |
+| `AttachmentStore` | S3 | Uploaded screenshot bytes; the turn keeps only the key |
+
+**Attachments never carry bytes into DynamoDB.** A conversation is a single item that
+`ConversationStore.append` rewrites on every turn, and DynamoDB caps items at 400 KB —
+base64 inflates by 4/3, so a ~300 KB screenshot was enough to fail the write and take the
+already-generated reply down with it. Three separate types enforce the split:
+`Attachment` (inbound, has `data`, feeds the LLM) → `StoredAttachment` (persisted, has
+`s3_key`, no bytes) → `AttachmentRef` (returned to the UI, presigned URL). Uploads are
+size-checked at the widget boundary (413) before any S3 or LLM spend, and both the upload
+and the presign in `Coordinator._finish` degrade on failure rather than raising — by that
+point the reply is already paid for, so losing a screenshot beats losing the answer.
 
 ### Flows
 
@@ -88,3 +99,6 @@ See `.env-example`. The important runtime ones:
 - `QDRANT_ENDPOINT` / `QDRANT_API_KEY` — Qdrant instance backing RAG; `GOOGLE_API_KEY` for the embedding model (`EMBEDDING_MODEL`, default `gemini-embedding-001`)
 - `LANGFUSE_*` — optional tracing; leave blank to disable
 - `DYNAMODB_ENDPOINT_URL` — set to `http://localhost:8000` for local dev
+- `S3_ENDPOINT_URL` / `S3_BUCKET_ATTACHMENTS` — attachment storage; `http://localhost:4566` for LocalStack. `MAX_ATTACHMENT_BYTES` (default 5 MB) is the upload cap, `S3_PRESIGN_EXPIRY_SECONDS` (default 1h) the display-URL lifetime.
+
+Note LocalStack is **not** part of `docker-compose.yml` — `make infra-up` starts only DynamoDB Local and Redis. Run LocalStack separately for the S3 path.

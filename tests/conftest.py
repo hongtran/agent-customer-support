@@ -9,6 +9,8 @@ os.environ.setdefault("AWS_ACCESS_KEY_ID", "local")
 os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "local")
 os.environ.setdefault("AWS_REGION", "ap-southeast-1")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
+os.environ.setdefault("S3_ENDPOINT_URL", "http://localhost:4566")  # LocalStack
+os.environ.setdefault("S3_BUCKET_ATTACHMENTS", "agent-customer-support-attachments")
 os.environ.setdefault("QDRANT_ENDPOINT", "http://localhost:6333")
 os.environ.setdefault("QDRANT_API_KEY", "local")
 os.environ.setdefault("GOOGLE_API_KEY", "fake-google-for-tests")
