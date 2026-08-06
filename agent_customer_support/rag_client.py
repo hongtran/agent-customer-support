@@ -160,6 +160,11 @@ class RagClient:
                 "citations": citations,
                 "top_confidence": top_conf,
                 "grounding_note": grounding,
+                # Per-hit metadata, positionally aligned with `passages`. Agents ignore
+                # it — it exists so evaluation can score *which* documents came back
+                # (application scope, source doc, rank) without re-implementing this
+                # search and drifting from what the agent actually sees.
+                "metas": metas,
             }
             sp.update(
                 output={
@@ -169,3 +174,4 @@ class RagClient:
                 }
             )
             return result
+
