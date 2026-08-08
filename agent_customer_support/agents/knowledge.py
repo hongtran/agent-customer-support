@@ -167,6 +167,9 @@ class KnowledgeAgent:
                 # applications=applications,
                 top_k=1,
                 score_threshold=cfg.qa_lead_threshold,
+                # QA is always global and each record is its own short document, so
+                # collapsing per source document would wrongly drop distinct records.
+                per_doc=None,
             )
         except (ApiException, ValueError) as exc:
             logger.warning("qa search failed, using product-only: %s", exc)

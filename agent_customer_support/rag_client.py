@@ -1,3 +1,4 @@
+from collections import defaultdict
 from typing import Any
 
 from qdrant_client import AsyncQdrantClient, models
@@ -96,7 +97,19 @@ class RagClient:
         score_threshold: float = 0.6,
         doc_type: str | None = None,
         applications: list[str] | None = None,
+        per_doc: int | None = 2,
     ) -> dict:
+        # `per_doc` controls how chunks are collapsed by source document, and only
+        # takes effect on a GLOBAL search (no `applications` scope):
+        #   - per_doc=N  -> keep at most N chunks per source_doc_id, then take top_k.
+        #                   This is the product-collection default: it stops one guide
+        #                   from crowding out every other document.
+        #   - per_doc=None -> no collapsing; take the top_k chunks as ranked. The QA
+        #                   collection passes this because it is always global and each
+        #                   record is its own short document.
+        # A specific-application search always skips collapsing regardless of per_doc:
+        # that scope is effectively a single guide, so one chunk per document would
+        # leave the agent with a single passage.
         resolved_collection = _normalize_collection(collection)
         # Callers pass display names (the widget forwards whatever the UI showed);
         # Qdrant stores slugs. Translate once here, before anything uses the value,
@@ -114,26 +127,38 @@ class RagClient:
             resp = await self._client.query_points(
                 collection_name=resolved_collection,
                 query=vec,
-                # Over-fetch: the dedup below collapses chunks of the same source
-                # document, and several chunks of one document routinely occupy the
-                # top hits. Not related to filtering — Qdrant handles that now.
+                # Over-fetch so the per-document cap (global product search) still has
+                # enough candidates to fill top_k after collapsing repeats of one
+                # document. Harmless for the no-cap paths — they just slice top_k.
+                # Not related to filtering — Qdrant handles that server-side.
                 limit=top_k * 4,
                 query_filter=_build_filter(doc_type, resolved_applications),
                 with_payload=True,
             )
             points = resp.points
 
-            above = [(p, p.score) for p in points if p.score >= score_threshold]
+            above = sorted(
+                ((p, p.score) for p in points if p.score >= score_threshold),
+                key=lambda x: x[1],
+                reverse=True,
+            )
 
-            # Deduplicate: keep highest-scoring chunk per source document.
-            best: dict[str, tuple[Any, float]] = {}
-            for p, s in above:
-                m = _meta(p)
-                sid = m.get("source_doc_id") or m.get("doc_id", "")
-                if sid not in best or s > best[sid][1]:
-                    best[sid] = (p, s)
-
-            ranked = sorted(best.values(), key=lambda x: x[1], reverse=True)[:top_k]
+            if resolved_applications or per_doc is None:
+                # Specific-application scope, or a global search that opts out of
+                # collapsing (QA): keep the top_k chunks as ranked.
+                ranked = above[:top_k]
+            else:
+                # Global product search: keep at most `per_doc` chunks per source
+                # document so one guide can't crowd out the rest, then take top_k.
+                counts: dict[str, int] = defaultdict(int)
+                kept: list[tuple[Any, float]] = []
+                for p, s in above:
+                    m = _meta(p)
+                    sid = m.get("source_doc_id") or m.get("doc_id", "")
+                    if counts[sid] < per_doc:
+                        counts[sid] += 1
+                        kept.append((p, s))
+                ranked = kept[:top_k]
 
             passages = [_text(p) for p, _ in ranked]
             metas = [{**_meta(p), "confidence": round(float(s), 4)} for p, s in ranked]

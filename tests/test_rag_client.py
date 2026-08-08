@@ -152,17 +152,60 @@ async def test_nothing_clears_threshold_returns_empty():
     assert res["top_confidence"] == 0.0
 
 
-async def test_dedup_keeps_highest_scoring_chunk_per_source():
+async def test_global_search_caps_chunks_per_source_at_per_doc():
+    # Global product search (no application scope) keeps at most per_doc=2 chunks of
+    # one source document, dropping the third so a single guide can't crowd out others.
     client = await _client_with(
         [
             _point(1, [1.0, 0.0], source_doc_id="hdsd#1", text="best"),
-            _point(2, [0.6, 0.8], source_doc_id="hdsd#1", text="worse"),
+            _point(2, [0.8, 0.6], source_doc_id="hdsd#1", text="mid"),
+            _point(3, [0.6, 0.8], source_doc_id="hdsd#1", text="worst"),
         ]
     )
     res = await RagClient(client=client).search("q", collection=COLLECTION)
     assert res["citations"] == ["hdsd#1"]
-    assert res["passages"] == ["best"]
+    assert res["passages"] == ["best", "mid"]  # "worst" dropped by the per-doc cap
     assert res["top_confidence"] == 1.0
+
+
+async def test_custom_per_doc_cap_is_respected():
+    client = await _client_with(
+        [
+            _point(1, [1.0, 0.0], source_doc_id="hdsd#1", text="best"),
+            _point(2, [0.8, 0.6], source_doc_id="hdsd#1", text="mid"),
+        ]
+    )
+    res = await RagClient(client=client).search("q", collection=COLLECTION, per_doc=1)
+    assert res["passages"] == ["best"]  # cap of 1 keeps only the top chunk per doc
+
+
+async def test_specific_application_skips_dedup():
+    # A scoped search is effectively one guide, so all its chunks are kept as ranked
+    # (per_doc is ignored) rather than collapsing to a single passage.
+    client = await _client_with(
+        [
+            _point(1, [1.0, 0.0], source_doc_id="hdsd#1", application="Lab", text="best"),
+            _point(2, [0.8, 0.6], source_doc_id="hdsd#1", application="Lab", text="mid"),
+            _point(3, [0.6, 0.8], source_doc_id="hdsd#1", application="Lab", text="worst"),
+        ]
+    )
+    res = await RagClient(client=client).search("q", collection=COLLECTION, applications=["Lab"])
+    assert res["citations"] == ["hdsd#1"]
+    assert res["passages"] == ["best", "mid", "worst"]
+
+
+async def test_per_doc_none_skips_dedup_on_global_search():
+    # QA-style call: global search that opts out of collapsing so distinct records
+    # (and repeated chunks) are all kept as ranked.
+    client = await _client_with(
+        [
+            _point(1, [1.0, 0.0], source_doc_id="qa#1", text="best"),
+            _point(2, [0.8, 0.6], source_doc_id="qa#1", text="mid"),
+            _point(3, [0.6, 0.8], source_doc_id="qa#1", text="worst"),
+        ]
+    )
+    res = await RagClient(client=client).search("q", collection=COLLECTION, per_doc=None)
+    assert res["passages"] == ["best", "mid", "worst"]
 
 
 async def test_grounding_note_is_neutral_hint():
