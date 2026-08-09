@@ -1,7 +1,7 @@
 // ui/components/MessageList.tsx
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 
 export interface Message {
   role: "user" | "agent" | "error";
@@ -19,6 +19,135 @@ interface Props {
   messages: Message[];
   loading: boolean;
   onFeedbackDown?: (messageId: string) => void;
+}
+
+/**
+ * Inline markdown within a single line: `**bold**` and `` `code` ``. Anything
+ * else is passed through untouched. We tokenize with one regex so the two
+ * markers can appear in any order without nesting bugs.
+ */
+function Inline({ text }: { text: string }) {
+  const nodes: ReactNode[] = [];
+  const regex = /\*\*(.+?)\*\*|`([^`]+)`/g;
+  let last = 0;
+  let key = 0;
+  let m: RegExpExecArray | null;
+  while ((m = regex.exec(text)) !== null) {
+    if (m.index > last) nodes.push(text.slice(last, m.index));
+    if (m[1] !== undefined) {
+      nodes.push(
+        <strong key={key++} className="font-semibold">
+          {m[1]}
+        </strong>,
+      );
+    } else {
+      nodes.push(
+        <code key={key++} className="rounded bg-black/5 px-1 py-0.5 text-[0.85em]">
+          {m[2]}
+        </code>,
+      );
+    }
+    last = regex.lastIndex;
+  }
+  if (last < text.length) nodes.push(text.slice(last));
+  return <>{nodes}</>;
+}
+
+type Block =
+  | { type: "ul" | "ol"; items: string[] }
+  | { type: "p"; lines: string[] };
+
+/**
+ * Group raw text into markdown blocks line-by-line: consecutive `- `/`* ` lines
+ * become a bullet list, `1.` lines an ordered list, blank lines break
+ * paragraphs, everything else accumulates into a paragraph.
+ */
+function parseBlocks(text: string): Block[] {
+  const blocks: Block[] = [];
+  let para: string[] = [];
+  let list: { type: "ul" | "ol"; items: string[] } | null = null;
+
+  const flushPara = () => {
+    if (para.length) {
+      blocks.push({ type: "p", lines: para });
+      para = [];
+    }
+  };
+  const flushList = () => {
+    if (list) {
+      blocks.push(list);
+      list = null;
+    }
+  };
+
+  for (const raw of text.split("\n")) {
+    const line = raw.trimEnd();
+    const ul = line.match(/^\s*[-*]\s+(.*)$/);
+    const ol = line.match(/^\s*\d+\.\s+(.*)$/);
+    if (ul) {
+      flushPara();
+      if (!list || list.type !== "ul") {
+        flushList();
+        list = { type: "ul", items: [] };
+      }
+      list.items.push(ul[1]);
+    } else if (ol) {
+      flushPara();
+      if (!list || list.type !== "ol") {
+        flushList();
+        list = { type: "ol", items: [] };
+      }
+      list.items.push(ol[1]);
+    } else if (line.trim() === "") {
+      flushPara();
+      flushList();
+    } else {
+      flushList();
+      para.push(line);
+    }
+  }
+  flushPara();
+  flushList();
+  return blocks;
+}
+
+/**
+ * Lightweight markdown renderer covering what the chat responses use:
+ * paragraphs, bullet/ordered lists, inline bold and code. Avoids a full
+ * markdown dependency; the container no longer needs `whitespace-pre-wrap`
+ * since block structure is now explicit.
+ */
+function Markdown({ text }: { text: string }) {
+  const blocks = parseBlocks(text);
+  return (
+    <div className="space-y-2">
+      {blocks.map((b, i) => {
+        if (b.type === "p") {
+          return (
+            <p key={i}>
+              {b.lines.map((ln, j) => (
+                <Fragment key={j}>
+                  {j > 0 && <br />}
+                  <Inline text={ln} />
+                </Fragment>
+              ))}
+            </p>
+          );
+        }
+        const ListTag = b.type === "ul" ? "ul" : "ol";
+        const listClass = b.type === "ul" ? "list-disc" : "list-decimal";
+        return (
+          <ListTag key={i} className={`${listClass} space-y-1 pl-5`}>
+            {b.items.map((it, j) => (
+              <li key={j}>
+                <Inline text={it} />
+              </li>
+            ))}
+          </ListTag>
+        );
+      })}
+    </div>
+  );
 }
 
 /** Thumbs-up outline; the dislike button reuses it rotated 180°. */
@@ -101,8 +230,8 @@ export default function MessageList({ messages, loading, onFeedbackDown }: Props
                   🤖
                 </div>
                 <div className="flex flex-col gap-0.5">
-                  <div className="rounded-2xl rounded-tl-sm px-4 py-2 text-sm whitespace-pre-wrap bg-gray-100 text-gray-800">
-                    {msg.content}
+                  <div className="rounded-2xl rounded-tl-sm px-4 py-2 text-sm bg-gray-100 text-gray-800">
+                    <Markdown text={msg.content} />
                   </div>
                   {msg.messageId && (
                     <div className="flex items-center gap-1 pl-1 h-7">
@@ -144,8 +273,8 @@ export default function MessageList({ messages, loading, onFeedbackDown }: Props
 
         return (
           <div key={i} className="flex justify-start">
-            <div className="max-w-[75%] rounded-2xl px-4 py-2 text-sm whitespace-pre-wrap bg-red-100 text-red-700 border border-red-300">
-              {msg.content}
+            <div className="max-w-[75%] rounded-2xl px-4 py-2 text-sm bg-red-100 text-red-700 border border-red-300">
+              <Markdown text={msg.content} />
             </div>
           </div>
         );
