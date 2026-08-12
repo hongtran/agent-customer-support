@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from agent_customer_support.applications import APPLICATION_SLUGS
 from agent_customer_support.channels.deps import get_qa_indexer, get_qa_store, require_admin
 from agent_customer_support.models import QARecord
 from agent_customer_support.rag.qa_indexer import QAIndexer
@@ -25,6 +26,24 @@ class QAPatch(BaseModel):
 
 class ApproveBody(BaseModel):
     approved_by: str | None = None
+
+
+class ApplicationOut(BaseModel):
+    name: str
+    slug: str
+
+
+@router.get("/applications")
+async def list_applications() -> list[ApplicationOut]:
+    """The canonical application catalogue, served so the admin UI can offer a
+    fixed choice instead of free text.
+
+    Names are what `CustomerProfile.enabled_applications` stores; the slug rides
+    along only so a UI can show what Qdrant actually filters on. Serving it from
+    `applications.APPLICATION_SLUGS` keeps the map single-sourced — a hardcoded
+    copy in the frontend would be a third one to keep in sync.
+    """
+    return [ApplicationOut(name=name, slug=slug) for name, slug in APPLICATION_SLUGS.items()]
 
 
 @router.get("/qa")

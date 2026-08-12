@@ -155,6 +155,18 @@ export async function sendFeedback(conversationId: string, messageId: string) {
 
 /* ------------------------------------------------------------------ admin */
 
+export interface Application {
+  name: string;
+  slug: string;
+}
+
+/** The canonical application catalogue, used to populate admin dropdowns. */
+export async function listApplications(): Promise<Application[]> {
+  const r = await request("/admin/applications");
+  if (!r.ok) throw new Error(`list applications failed: ${r.status}`);
+  return r.json();
+}
+
 export async function listQA(status = "pending") {
   const r = await request(`/admin/qa?status=${status}`);
   if (!r.ok) throw new Error(`list failed: ${r.status}`);

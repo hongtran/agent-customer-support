@@ -5,16 +5,18 @@ import {
   Customer,
   Role,
   createCustomer,
+  listApplications,
   listCustomers,
   updateCustomer,
 } from "@/lib/api";
+import ApplicationsSelect from "./ApplicationsSelect";
 
 type Draft = {
   customer_id: string;
   name: string;
   password: string;
   role: Role;
-  enabled_applications: string;
+  enabled_applications: string[];
 };
 
 const EMPTY_DRAFT: Draft = {
@@ -22,14 +24,8 @@ const EMPTY_DRAFT: Draft = {
   name: "",
   password: "",
   role: "user",
-  enabled_applications: "",
+  enabled_applications: [],
 };
-
-const splitApps = (s: string) =>
-  s
-    .split(",")
-    .map((a) => a.trim())
-    .filter(Boolean);
 
 function RoleBadge({ role }: { role: Role }) {
   const cls =
@@ -47,6 +43,7 @@ function RoleBadge({ role }: { role: Role }) {
 
 export default function CustomerAdmin() {
   const [items, setItems] = useState<Customer[]>([]);
+  const [appOptions, setAppOptions] = useState<string[]>([]);
   const [sel, setSel] = useState<Customer | null>(null);
   const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
@@ -57,6 +54,13 @@ export default function CustomerAdmin() {
 
   useEffect(() => {
     refresh();
+    // The catalogue is static per deployment, so it is fetched once and never with
+    // the customer list. A failure here only costs the dropdown its options — the
+    // form still works on whatever a customer already has, so it isn't surfaced as
+    // a form error.
+    listApplications()
+      .then((apps) => setAppOptions(apps.map((a) => a.name)))
+      .catch(() => setAppOptions([]));
   }, []);
 
   async function refresh() {
@@ -93,7 +97,7 @@ export default function CustomerAdmin() {
         name: draft.name.trim(),
         password: draft.password,
         role: draft.role,
-        enabled_applications: splitApps(draft.enabled_applications),
+        enabled_applications: draft.enabled_applications,
       });
       setCreating(false);
       setDraft(EMPTY_DRAFT);
@@ -254,14 +258,12 @@ export default function CustomerAdmin() {
               </div>
 
               <div>
-                <label className={labelCls}>
-                  Applications <span className="font-normal normal-case">(phân cách bằng dấu phẩy)</span>
-                </label>
-                <input
+                <label className={labelCls}>Applications</label>
+                <ApplicationsSelect
                   value={draft.enabled_applications}
-                  onChange={(e) => setDraft({ ...draft, enabled_applications: e.target.value })}
-                  placeholder="Lấy mẫu - Quan trắc, Phòng thí nghiệm"
-                  className={inputCls}
+                  options={appOptions}
+                  onChange={(apps) => setDraft({ ...draft, enabled_applications: apps })}
+                  disabled={busy}
                 />
               </div>
 
@@ -321,15 +323,12 @@ export default function CustomerAdmin() {
               </div>
 
               <div>
-                <label className={labelCls}>
-                  Applications <span className="font-normal normal-case">(phân cách bằng dấu phẩy)</span>
-                </label>
-                <input
-                  value={sel.enabled_applications.join(", ")}
-                  onChange={(e) =>
-                    setSel({ ...sel, enabled_applications: splitApps(e.target.value) })
-                  }
-                  className={inputCls}
+                <label className={labelCls}>Applications</label>
+                <ApplicationsSelect
+                  value={sel.enabled_applications}
+                  options={appOptions}
+                  onChange={(apps) => setSel({ ...sel, enabled_applications: apps })}
+                  disabled={busy}
                 />
               </div>
 
