@@ -15,7 +15,9 @@ os.environ.setdefault("QDRANT_ENDPOINT", "http://localhost:6333")
 os.environ.setdefault("QDRANT_API_KEY", "local")
 os.environ.setdefault("GOOGLE_API_KEY", "fake-google-for-tests")
 os.environ.setdefault("QA_COLLECTION", "cenlab_qa")
-os.environ.setdefault("ADMIN_TOKEN", "test-admin-token")
+# >=32 bytes: PyJWT warns below that for HS256, and a test secret that trips the warning
+# trains people to ignore it.
+os.environ.setdefault("JWT_SECRET", "test-jwt-secret-at-least-32-bytes-long")
 os.environ.setdefault("CELERY_BROKER_URL", "redis://localhost:6379/1")
 os.environ.setdefault("CELERY_RESULT_BACKEND", "redis://localhost:6379/2")
 os.environ.setdefault("OPENAI_API_KEY", "sk-fake-for-tests")
@@ -54,3 +56,34 @@ def _patched_to_httpx_request(cls, **kwargs):
 
 
 _HTTPCoreMocker.to_httpx_request = _patched_to_httpx_request
+
+
+# --- auth fixtures -----------------------------------------------------------------
+# Every /widget/* and /admin/* route now sits behind a bearer token. Endpoint tests
+# care about the endpoint, not about JWT round-trips, so they override the identity
+# dependency directly; tests/channels/test_auth_routes.py exercises the real token
+# path end to end.
+
+import pytest  # noqa: E402
+
+from agent_customer_support.channels.deps import get_current_customer  # noqa: E402
+from agent_customer_support.models import CustomerProfile  # noqa: E402
+from agent_customer_support.server import app  # noqa: E402
+
+
+def _authenticate_as(profile: CustomerProfile):
+    app.dependency_overrides[get_current_customer] = lambda: profile
+    yield profile
+    app.dependency_overrides.pop(get_current_customer, None)
+
+
+@pytest.fixture
+def as_user():
+    """Authenticate requests as an ordinary customer (role='user')."""
+    yield from _authenticate_as(CustomerProfile(customer_id="cust1", name="Cust 1"))
+
+
+@pytest.fixture
+def as_admin():
+    """Authenticate requests as an admin (role='admin')."""
+    yield from _authenticate_as(CustomerProfile(customer_id="admin", name="Admin", role="admin"))

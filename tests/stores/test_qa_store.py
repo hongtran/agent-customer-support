@@ -36,9 +36,7 @@ async def test_list_filters_by_status():
 async def test_find_by_feedback_message_id():
     store = QAStore()
     await store.init()
-    rec = await store.add(
-        QARecord(question="q", source="feedback", feedback_message_id="msg-123")
-    )
+    rec = await store.add(QARecord(question="q", source="feedback", feedback_message_id="msg-123"))
     found = await store.find_by_feedback_message_id("msg-123")
     assert found and found.id == rec.id
     assert await store.find_by_feedback_message_id("nope") is None

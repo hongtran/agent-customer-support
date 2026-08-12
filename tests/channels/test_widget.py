@@ -4,7 +4,7 @@ from agent_customer_support.models import ChatResponse
 from agent_customer_support.server import app, get_agent
 
 
-def test_chat_endpoint_returns_reply():
+def test_chat_endpoint_returns_reply(as_user):
     fake = AsyncMock()
     fake.handle_turn.return_value = ChatResponse(
         conversation_id="cv1", reply="Xin chào", citations=["c#1"]
@@ -13,7 +13,7 @@ def test_chat_endpoint_returns_reply():
     client = TestClient(app)
     resp = client.post(
         "/widget/chat",
-        json={"customer_id": "c1", "conversation_id": "cv1", "message": "hi"},
+        json={"conversation_id": "cv1", "message": "hi"},
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -21,7 +21,7 @@ def test_chat_endpoint_returns_reply():
     app.dependency_overrides.clear()
 
 
-def test_chat_passes_attachments():
+def test_chat_passes_attachments(as_user):
     fake = AsyncMock()
     fake.handle_turn.return_value = ChatResponse(conversation_id="cv1", reply="hi")
     app.dependency_overrides[get_agent] = lambda: fake
@@ -29,7 +29,6 @@ def test_chat_passes_attachments():
     resp = client.post(
         "/widget/chat",
         json={
-            "customer_id": "c1",
             "conversation_id": "cv1",
             "message": "hello",
             "attachments": [{"kind": "image", "media_type": "image/png", "data": "QUJD"}],

@@ -135,31 +135,40 @@ MARKER (tối đa một):
 # below (source count, the added source #3, a 3-tier precedence rule, the
 # anti-hallucination line, and the [[no_answer]] marker). Keep every other line
 # verbatim so the tuned diagnosis/clarify/admin-routing behavior is preserved.
-KNOWLEDGE_COMPOSE_PROMPT_WITH_QA = KNOWLEDGE_COMPOSE_PROMPT.replace(
-    "Chỉ dựa trên hai nguồn dưới.",
-    "Chỉ dựa trên ba nguồn dưới.",
-).replace(
-    "2. ĐOẠN TRÍCH (passages dưới, RAG lọc theo đúng ứng dụng): chi tiết bên trong MỘT ứng dụng/module — flow nội bộ, logic/nghiệp vụ, thao tác UI. CÓ THỂ RỖNG.",
-    "2. ĐOẠN TRÍCH (passages dưới, RAG lọc theo đúng ứng dụng): chi tiết bên trong MỘT ứng dụng/module — flow nội bộ, logic/nghiệp vụ, thao tác UI. CÓ THỂ RỖNG.\n"
-    "3. ĐÁP ÁN CS XÁC NHẬN (nếu có, hiển thị dưới đoạn trích): câu trả lời do nhân viên CS biên soạn và duyệt cho đúng câu hỏi này — đã được người thật kiểm chứng. Được đánh dấu \"ưu tiên cao nhất\" hoặc \"bổ trợ\".",
-).replace(
-    "ƯU TIÊN khi hai nguồn mâu thuẫn: QUY TRÌNH chuẩn cho trình tự liên-module/điều kiện/phân quyền/điểm kiểm soát; ĐOẠN TRÍCH chuẩn cho chi tiết nội bộ module (flow, logic, UI).",
-    "ƯU TIÊN khi các nguồn mâu thuẫn (thứ tự giảm dần): (1) ĐÁP ÁN CS XÁC NHẬN đánh dấu \"ưu tiên cao nhất\" — thắng tất cả, kể cả QUY TRÌNH, cho đúng câu hỏi đó; (2) QUY TRÌNH chuẩn cho trình tự liên-module/điều kiện/phân quyền/điểm kiểm soát; (3) ĐOẠN TRÍCH chuẩn cho chi tiết nội bộ module (flow, logic, UI). ĐÁP ÁN CS đánh dấu \"bổ trợ\" chỉ để tham khảo, KHÔNG vượt QUY TRÌNH.",
-).replace(
-    "Không dùng kiến thức ngoài hai nguồn.",
-    "Không dùng kiến thức ngoài ba nguồn.",
-).replace(
-    "CẢ hai nguồn đều không trả lời được → đúng một dòng: [[no_answer]]",
-    "Tất cả các nguồn đều không trả lời được → đúng một dòng: [[no_answer]]",
-).replace(
-    "cũng KHÔNG tra được trong hai nguồn.",
-    "cũng KHÔNG tra được trong ba nguồn.",
-).replace(
-    "MỖI nhánh phải bám hai nguồn,",
-    "MỖI nhánh phải bám ba nguồn,",
-).replace(
-    "nội dung vẫn bám hai nguồn.",
-    "nội dung vẫn bám ba nguồn.",
+KNOWLEDGE_COMPOSE_PROMPT_WITH_QA = (
+    KNOWLEDGE_COMPOSE_PROMPT.replace(
+        "Chỉ dựa trên hai nguồn dưới.",
+        "Chỉ dựa trên ba nguồn dưới.",
+    )
+    .replace(
+        "2. ĐOẠN TRÍCH (passages dưới, RAG lọc theo đúng ứng dụng): chi tiết bên trong MỘT ứng dụng/module — flow nội bộ, logic/nghiệp vụ, thao tác UI. CÓ THỂ RỖNG.",
+        "2. ĐOẠN TRÍCH (passages dưới, RAG lọc theo đúng ứng dụng): chi tiết bên trong MỘT ứng dụng/module — flow nội bộ, logic/nghiệp vụ, thao tác UI. CÓ THỂ RỖNG.\n"
+        '3. ĐÁP ÁN CS XÁC NHẬN (nếu có, hiển thị dưới đoạn trích): câu trả lời do nhân viên CS biên soạn và duyệt cho đúng câu hỏi này — đã được người thật kiểm chứng. Được đánh dấu "ưu tiên cao nhất" hoặc "bổ trợ".',
+    )
+    .replace(
+        "ƯU TIÊN khi hai nguồn mâu thuẫn: QUY TRÌNH chuẩn cho trình tự liên-module/điều kiện/phân quyền/điểm kiểm soát; ĐOẠN TRÍCH chuẩn cho chi tiết nội bộ module (flow, logic, UI).",
+        'ƯU TIÊN khi các nguồn mâu thuẫn (thứ tự giảm dần): (1) ĐÁP ÁN CS XÁC NHẬN đánh dấu "ưu tiên cao nhất" — thắng tất cả, kể cả QUY TRÌNH, cho đúng câu hỏi đó; (2) QUY TRÌNH chuẩn cho trình tự liên-module/điều kiện/phân quyền/điểm kiểm soát; (3) ĐOẠN TRÍCH chuẩn cho chi tiết nội bộ module (flow, logic, UI). ĐÁP ÁN CS đánh dấu "bổ trợ" chỉ để tham khảo, KHÔNG vượt QUY TRÌNH.',
+    )
+    .replace(
+        "Không dùng kiến thức ngoài hai nguồn.",
+        "Không dùng kiến thức ngoài ba nguồn.",
+    )
+    .replace(
+        "CẢ hai nguồn đều không trả lời được → đúng một dòng: [[no_answer]]",
+        "Tất cả các nguồn đều không trả lời được → đúng một dòng: [[no_answer]]",
+    )
+    .replace(
+        "cũng KHÔNG tra được trong hai nguồn.",
+        "cũng KHÔNG tra được trong ba nguồn.",
+    )
+    .replace(
+        "MỖI nhánh phải bám hai nguồn,",
+        "MỖI nhánh phải bám ba nguồn,",
+    )
+    .replace(
+        "nội dung vẫn bám hai nguồn.",
+        "nội dung vẫn bám ba nguồn.",
+    )
 )
 
 # Appended to the compose user-content on a clarify resume turn (the user is answering

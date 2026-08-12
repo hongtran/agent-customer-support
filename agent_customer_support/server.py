@@ -4,6 +4,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from agent_customer_support.channels.widget import router as widget_router, get_agent
 from agent_customer_support.channels.admin import router as admin_router
+from agent_customer_support.channels.admin_customers import router as admin_customers_router
+from agent_customer_support.channels.auth import router as auth_router
 from agent_customer_support.channels.deps import get_qa_indexer
 from agent_customer_support.config import get_settings
 from agent_customer_support.stores.qa_store import QAStore
@@ -19,6 +21,11 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Refuse to serve without a signing secret. Every other store failure below is
+    # tolerated and logged, but an unsigned-in-practice token system is worse than an
+    # API that won't start: it would accept forged tokens for every tenant.
+    if not get_settings().jwt_secret:
+        raise RuntimeError("JWT_SECRET must be set — refusing to start without it")
     for store in (
         CustomerRegistry(),
         ConversationStore(),
@@ -53,11 +60,13 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=get_settings().cors_origins,
     allow_methods=["POST", "GET", "PUT", "DELETE", "OPTIONS", "PATCH"],
-    allow_headers=["Content-Type", "X-Admin-Token"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
+app.include_router(auth_router)
 app.include_router(widget_router)
 app.include_router(admin_router)
+app.include_router(admin_customers_router)
 
 
 @app.get("/health")

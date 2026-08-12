@@ -1,20 +1,23 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import ConfigBar from "@/components/ConfigBar";
 import MessageList, { Message } from "@/components/MessageList";
 import InputBar from "@/components/InputBar";
-import { sendMessage, sendFeedback, Attachment } from "@/lib/api";
+import { sendMessage, sendFeedback, Attachment, UnauthorizedError } from "@/lib/api";
+import { logout, useSession } from "@/lib/useSession";
 
 export default function Home() {
-  const [customerId, setCustomerId] = useState("ttp");
+  const router = useRouter();
+  const session = useSession();
   const [conversationId, setConversationId] = useState("smoke-ui");
   const [selectedApplications, setSelectedApplications] = useState<string[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
 
   const handleFeedbackDown = (messageId: string) => {
-    sendFeedback(conversationId, messageId);
+    sendFeedback(conversationId, messageId).catch(() => {});
   };
 
   const handleNewConversation = () => {
@@ -29,13 +32,14 @@ export default function Home() {
       {
         role: "user",
         content: text,
-        attachments: attachments.length > 0 ? attachments.map((a) => ({ media_type: a.media_type })) : undefined,
+        attachments:
+          attachments.length > 0 ? attachments.map((a) => ({ media_type: a.media_type })) : undefined,
       },
     ]);
     setLoading(true);
     try {
       const result = await sendMessage({
-        customer_id: customerId,
+        // customer_id is gone: the server reads the tenant from the access token.
         conversation_id: conversationId,
         message: text,
         attachments: attachments.length > 0 ? attachments : undefined,
@@ -53,6 +57,10 @@ export default function Home() {
         return [...next, { role: "agent", content: result.reply, messageId: result.message_id }];
       });
     } catch (err) {
+      if (err instanceof UnauthorizedError) {
+        logout(router);
+        return;
+      }
       const msg = err instanceof Error ? err.message : "Unknown error";
       setMessages((prev) => [...prev, { role: "error", content: `Error: ${msg}` }]);
     } finally {
@@ -60,16 +68,20 @@ export default function Home() {
     }
   };
 
+  if (session.status === "loading") {
+    return <div className="flex h-screen items-center justify-center text-sm text-gray-400">…</div>;
+  }
+
   return (
     <div className="flex h-screen flex-col">
       <ConfigBar
-        customerId={customerId}
+        me={session.me}
         conversationId={conversationId}
         selectedApplications={selectedApplications}
-        onCustomerIdChange={setCustomerId}
         onConversationIdChange={setConversationId}
         onApplicationsChange={setSelectedApplications}
         onNewConversation={handleNewConversation}
+        onLogout={() => logout(router)}
       />
       <MessageList messages={messages} loading={loading} onFeedbackDown={handleFeedbackDown} />
       <InputBar onSend={handleSend} disabled={loading} />

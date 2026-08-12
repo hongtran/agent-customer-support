@@ -62,6 +62,33 @@ Application scoping is a **hard, server-side Qdrant payload filter** (`_build_fi
 
 **Payload indexes are mandatory, not an optimisation.** The Qdrant deployment runs strict mode with `unindexed_filtering_retrieve=False`, so filtering on a key with no keyword payload index fails with a 400 — there is no fallback scan. The product collection already has indexes on `metadata.application`, `metadata.doc_type`, and `metadata.job_role` (created by enterprise-llm-service's `rag/indexing.py`). For the Q&A collection, `rag/qa_indexer.ensure_collection` creates them — deliberately on every process start, not only at collection creation, because that collection predates the indexes.
 
+### Authentication
+
+Every `/widget/*` and `/admin/*` route requires a bearer JWT; `/admin/*` additionally
+requires `role == "admin"`. `auth.py` is the only module that imports bcrypt or PyJWT.
+
+**There is no separate user table.** `CustomerProfile` carries `password_hash` (bcrypt,
+nullable — `None` means "cannot log in", which is what every pre-auth row looks like) and
+`role`. **The login `user_name` IS the `customer_id`**, so login is a direct `get_item`
+with no secondary index — the trade-off is that a username can't change without changing
+the tenant id, and `POST /admin/customers` therefore refuses to overwrite an existing id
+(`ConditionExpression`, 409) instead of letting `put_item` upsert a live tenant away.
+
+**`ChatRequest` has no `customer_id`.** Identity comes from the token in
+`get_current_customer` (`channels/deps.py`) and nowhere else. A client-supplied tenant id
+was the original hole: it keys the conversation store and drives the Qdrant application
+filter, so trusting it crossed the tenant boundary. For the same reason
+`/widget/me/applications` has no path parameter, and `/widget/feedback` checks
+conversation ownership before copying a transcript into the Q&A store.
+
+`get_current_customer` re-reads the profile from `CustomerRegistry` rather than trusting
+the token's claims beyond `sub` — the token is stateless and unrevocable, so that read is
+what makes a deleted customer or a demoted admin take effect immediately instead of at
+expiry. `role` is therefore always the stored one, never the minted one.
+
+The first admin is inserted by hand (see `docs/DEV.md`); there is no bootstrap path and
+no seed script by design.
+
 ### Storage
 
 | Store | Backend | Purpose |
@@ -97,6 +124,9 @@ See `.env-example`. The important runtime ones:
 - `ENVIRONMENT` — `dev` (default) or `prod`; sets the enforced reasoning effort and output token ceiling. Prod deployments must inject it explicitly — the default is `dev`, i.e. `low` effort.
 - `AGENT_MODEL` — default model (e.g. `gpt-5.4-mini`, `claude-sonnet-4-6`); per-agent overrides via `TRIAGE_MODEL`, `KNOWLEDGE_MODEL`, `KNOWLEDGE_CONTEXTUALIZE_MODEL`, `VERIFICATION_MODEL`, `FLOW_MODEL`, `GUARDRAIL_MODEL`
 - `QDRANT_ENDPOINT` / `QDRANT_API_KEY` — Qdrant instance backing RAG; `GOOGLE_API_KEY` for the embedding model (`EMBEDDING_MODEL`, default `gemini-embedding-001`)
+- `JWT_SECRET` — signs access tokens; **no default, the server refuses to start without it**.
+  Anyone holding it can mint an admin token for any customer. `JWT_EXPIRE_MINUTES` (default 480)
+  is the token lifetime; there is no refresh token, so a token is valid until it expires.
 - `LANGFUSE_*` — optional tracing; leave blank to disable
 - `DYNAMODB_ENDPOINT_URL` — set to `http://localhost:8000` for local dev
 - `S3_ENDPOINT_URL` / `S3_BUCKET_ATTACHMENTS` — attachment storage; `http://localhost:4566` for LocalStack. `MAX_ATTACHMENT_BYTES` (default 5 MB) is the upload cap, `S3_PRESIGN_EXPIRY_SECONDS` (default 1h) the display-URL lifetime.

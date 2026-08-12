@@ -26,8 +26,9 @@ def _stub_embed(monkeypatch):
 async def test_upsert_embeds_question_and_stores_answer(_stub_embed):
     client = AsyncQdrantClient(location=":memory:")
     idx = QAIndexer(client=client)
-    rec = QARecord(question="đổi mật khẩu?", answer="Vào Cài đặt", source="manual",
-                   application="Lab")
+    rec = QARecord(
+        question="đổi mật khẩu?", answer="Vào Cài đặt", source="manual", application="Lab"
+    )
     await idx.upsert(rec)
 
     # the vector came from the QUESTION
@@ -37,7 +38,7 @@ async def test_upsert_embeds_question_and_stores_answer(_stub_embed):
     got = await client.retrieve(physical, ids=[rec.id], with_payload=True)
     assert len(got) == 1
     payload = got[0].payload
-    assert payload["page_content"] == "Vào Cài đặt"           # answer is the content
+    assert payload["page_content"] == "Vào Cài đặt"  # answer is the content
     assert payload["metadata"]["doc_type"] == "qa"
     assert payload["metadata"]["source_doc_id"] == rec.id
     assert payload["metadata"]["application"] == "Lab"

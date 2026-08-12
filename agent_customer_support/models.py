@@ -1,9 +1,9 @@
 import base64
 from binascii import Error as BinasciiError
 from datetime import datetime, UTC
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import uuid4
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, StringConstraints, field_validator
 
 
 def _now() -> datetime:
@@ -44,12 +44,25 @@ class Flow(BaseModel):
 
 # ---- Customer ----
 
+Role = Literal["admin", "user"]
+
+# customer_id doubles as the login username, a JWT `sub`, a DynamoDB partition key and a
+# URL path segment, so it is constrained rather than trusted. Shared as a type so the
+# admin create-request enforces the identical rule and a bad id is a 422 at the request
+# boundary, not a 500 raised from inside a handler building a CustomerProfile.
+CustomerId = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9._-]{1,64}$")]
+
 
 class CustomerProfile(BaseModel):
-    customer_id: str
+    customer_id: CustomerId
     name: str
     enabled_applications: list[str] = Field(default_factory=list)
     config_notes: str | None = None
+    # bcrypt output only — a plaintext password is never persisted. None means this
+    # profile has no credentials and cannot log in, which is what every row created
+    # before authentication existed looks like.
+    password_hash: str | None = None
+    role: Role = "user"
 
 
 # ---- Attachments ----
@@ -180,7 +193,9 @@ class SessionState(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    customer_id: str
+    # No customer_id: identity comes from the access token, never from the body. A
+    # client-supplied tenant id was the whole vulnerability this replaced — it feeds
+    # the Qdrant application scoping filter and keys the conversation store.
     conversation_id: str
     message: str
     attachments: list[Attachment] = Field(default_factory=list)

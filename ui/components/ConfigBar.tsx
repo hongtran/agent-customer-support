@@ -1,39 +1,39 @@
 // ui/components/ConfigBar.tsx
 "use client";
 
-import { useEffect, useState } from "react";
-import { getCustomerApplications } from "@/lib/api";
+import { useEffect } from "react";
+import Link from "next/link";
+import { Me } from "@/lib/api";
 
 interface Props {
-  customerId: string;
+  me: Me;
   conversationId: string;
   selectedApplications: string[];
-  onCustomerIdChange: (v: string) => void;
   onConversationIdChange: (v: string) => void;
   onApplicationsChange: (applications: string[]) => void;
   onNewConversation: () => void;
+  onLogout: () => void;
 }
 
 export default function ConfigBar({
-  customerId,
+  me,
   conversationId,
   selectedApplications,
-  onCustomerIdChange,
   onConversationIdChange,
   onApplicationsChange,
   onNewConversation,
+  onLogout,
 }: Props) {
-  const [availableApplications, setAvailableApplications] = useState<string[]>([]);
+  // The customer used to be a free-text input; it now comes from the token, so the
+  // available applications come straight off the session with no extra fetch.
+  const availableApplications = me.enabled_applications;
 
   useEffect(() => {
-    if (!customerId) return;
-    getCustomerApplications(customerId).then((apps) => {
-      setAvailableApplications(apps);
-      // Clear any previously selected applications that no longer exist for this customer
-      onApplicationsChange(selectedApplications.filter((a) => apps.includes(a)));
-    });
+    // Drop any selection that isn't offered to this customer.
+    const pruned = selectedApplications.filter((a) => availableApplications.includes(a));
+    if (pruned.length !== selectedApplications.length) onApplicationsChange(pruned);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [customerId]);
+  }, [availableApplications]);
 
   const toggleApplication = (app: string) => {
     if (selectedApplications.includes(app)) {
@@ -46,14 +46,10 @@ export default function ConfigBar({
   return (
     <div className="border-b border-gray-200 bg-gray-50 px-4 py-2 text-sm">
       <div className="flex items-center gap-3">
-        <label className="flex items-center gap-1 text-gray-600">
-          Customer
-          <input
-            className="ml-1 rounded border border-gray-300 px-2 py-1 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-blue-400"
-            value={customerId}
-            onChange={(e) => onCustomerIdChange(e.target.value)}
-          />
-        </label>
+        <span className="text-gray-600">
+          {me.name}
+          <span className="ml-1 font-mono text-xs text-gray-400">({me.customer_id})</span>
+        </span>
         <label className="flex items-center gap-1 text-gray-600">
           Conv
           <input
@@ -62,12 +58,28 @@ export default function ConfigBar({
             onChange={(e) => onConversationIdChange(e.target.value)}
           />
         </label>
-        <button
-          onClick={onNewConversation}
-          className="ml-auto rounded bg-gray-200 px-3 py-1 text-xs text-gray-700 hover:bg-gray-300"
-        >
-          New conversation
-        </button>
+        <div className="ml-auto flex items-center gap-2">
+          {me.role === "admin" && (
+            <Link
+              href="/admin"
+              className="rounded bg-gray-200 px-3 py-1 text-xs text-gray-700 hover:bg-gray-300"
+            >
+              Admin
+            </Link>
+          )}
+          <button
+            onClick={onNewConversation}
+            className="rounded bg-gray-200 px-3 py-1 text-xs text-gray-700 hover:bg-gray-300"
+          >
+            New conversation
+          </button>
+          <button
+            onClick={onLogout}
+            className="rounded px-3 py-1 text-xs text-gray-500 hover:text-gray-700"
+          >
+            Đăng xuất
+          </button>
+        </div>
       </div>
 
       {availableApplications.length > 0 && (

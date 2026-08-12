@@ -27,6 +27,36 @@ cp .env-example .env
 # Edit .env: set OPENAI_API_KEY or ANTHROPIC_API_KEY, GOOGLE_API_KEY
 ```
 
+## Authentication
+
+Every `/widget/*` and `/admin/*` route sits behind a bearer token. `POST /auth/login`
+takes `{user_name, password}` and returns a JWT — **`user_name` is the `customer_id`**,
+there is no separate username field. `/admin/*` additionally requires `role == "admin"`.
+
+Set `JWT_SECRET` in `.env` first; the server refuses to start without it.
+
+### Creating the first admin
+
+There is no bootstrap code and no seed script — the first admin is a row you insert by
+hand. It needs a bcrypt hash, not a plaintext password:
+
+```bash
+poetry run python -c \
+  "from agent_customer_support.auth import hash_password; print(hash_password('your-password'))"
+```
+
+Then write the row (DynamoDB Local):
+
+```bash
+aws dynamodb put-item --endpoint-url http://localhost:8000 --table-name acs_customers \
+  --item '{"customer_id":{"S":"admin"},"name":{"S":"Admin"},"role":{"S":"admin"},
+           "password_hash":{"S":"<paste the hash>"},"enabled_applications":{"L":[]}}'
+```
+
+Every customer after that is created from the **Khách hàng** tab in the admin UI, or via
+`POST /admin/customers`. Profiles that predate authentication have no `password_hash` and
+cannot log in until an admin sets one.
+
 ## Running the agent
 
 ```bash
@@ -36,10 +66,15 @@ poetry run python scripts/import_flows.py seeds/flows
 # Start the API server (port 8800)
 make run
 
-# Test the chat endpoint
-curl -X POST http://localhost:8800/widget/chat \
+# Log in to get a token
+TOKEN=$(curl -s -X POST http://localhost:8800/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"customer_id":"ttp","conversation_id":"cv1","message":"Làm sao xử lý PYC sự cố?"}'
+  -d '{"user_name":"ttp","password":"your-password"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
+
+# Test the chat endpoint — note there is no customer_id in the body, it comes from the token
+curl -X POST http://localhost:8800/widget/chat \
+  -H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" \
+  -d '{"conversation_id":"cv1","message":"Làm sao xử lý PYC sự cố?"}'
 ```
 
 ## Tests

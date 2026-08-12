@@ -19,7 +19,6 @@ def _b64(n: int) -> str:
 
 def _payload(attachments=None, message="cái này lỗi gì?"):
     body = {
-        "customer_id": "cust1",
         "conversation_id": "conv1",
         "message": message,
     }
@@ -49,7 +48,7 @@ def spy():
     app.dependency_overrides.clear()
 
 
-def test_oversized_attachment_is_rejected_with_413(spy):
+def test_oversized_attachment_is_rejected_with_413(spy, as_user):
     limit = get_settings().max_attachment_bytes
     with TestClient(app) as c:
         res = c.post(
@@ -62,7 +61,7 @@ def test_oversized_attachment_is_rejected_with_413(spy):
     assert spy.calls == 0
 
 
-def test_several_attachments_are_summed_against_the_limit(spy):
+def test_several_attachments_are_summed_against_the_limit(spy, as_user):
     limit = get_settings().max_attachment_bytes
     half = limit // 2 + 1024
     with TestClient(app) as c:
@@ -79,7 +78,7 @@ def test_several_attachments_are_summed_against_the_limit(spy):
     assert spy.calls == 0
 
 
-def test_attachment_under_the_limit_is_accepted(spy):
+def test_attachment_under_the_limit_is_accepted(spy, as_user):
     # 1 MB: comfortably past the old ~300 KB DynamoDB ceiling, under the new cap
     with TestClient(app) as c:
         res = c.post(
@@ -91,7 +90,7 @@ def test_attachment_under_the_limit_is_accepted(spy):
     assert len(spy.seen["attachments"]) == 1
 
 
-def test_malformed_base64_is_rejected_with_422(spy):
+def test_malformed_base64_is_rejected_with_422(spy, as_user):
     with TestClient(app) as c:
         res = c.post(
             "/widget/chat",
@@ -101,7 +100,7 @@ def test_malformed_base64_is_rejected_with_422(spy):
     assert spy.calls == 0
 
 
-def test_unsupported_media_type_is_rejected_with_422(spy):
+def test_unsupported_media_type_is_rejected_with_422(spy, as_user):
     with TestClient(app) as c:
         res = c.post(
             "/widget/chat",
@@ -111,7 +110,7 @@ def test_unsupported_media_type_is_rejected_with_422(spy):
     assert spy.calls == 0
 
 
-def test_no_attachments_is_unaffected(spy):
+def test_no_attachments_is_unaffected(spy, as_user):
     with TestClient(app) as c:
         res = c.post("/widget/chat", json=_payload())
     assert res.status_code == 200

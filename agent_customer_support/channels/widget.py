@@ -11,8 +11,11 @@ from agent_customer_support.models import (
     QARecord,
 )
 from agent_customer_support.agents.coordinator import Coordinator
-from agent_customer_support.stores.customer_registry import CustomerRegistry
-from agent_customer_support.channels.deps import get_conversation_store, get_qa_store
+from agent_customer_support.channels.deps import (
+    get_conversation_store,
+    get_current_customer,
+    get_qa_store,
+)
 from agent_customer_support.config import get_settings
 from agent_customer_support.stores.conversation_store import ConversationStore
 from agent_customer_support.stores.qa_store import QAStore
@@ -26,7 +29,11 @@ def get_agent() -> Coordinator:
 
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest, agent: Coordinator = Depends(get_agent)) -> ChatResponse:
+async def chat(
+    req: ChatRequest,
+    agent: Coordinator = Depends(get_agent),
+    customer: CustomerProfile = Depends(get_current_customer),
+) -> ChatResponse:
     # Size-check before anything else: an oversized upload should cost nothing, and
     # everything downstream (S3, the LLM) is more expensive than this comparison.
     # decoded_size is arithmetic on the base64 length, so the payload is never
@@ -39,7 +46,8 @@ async def chat(req: ChatRequest, agent: Coordinator = Depends(get_agent)) -> Cha
             detail=f"attachments total {total} bytes, limit is {limit}",
         )
     return await agent.handle_turn(
-        customer_id=req.customer_id,
+        # From the token, never the body — this is what makes the tenant boundary real.
+        customer_id=customer.customer_id,
         conversation_id=req.conversation_id,
         message=req.message,
         attachments=req.attachments,
@@ -52,12 +60,20 @@ class CustomerApplicationsResponse(BaseModel):
     enabled_applications: list[str]
 
 
-@router.get("/customer/{customer_id}", response_model=CustomerApplicationsResponse)
-async def get_customer_applications(customer_id: str) -> CustomerApplicationsResponse:
-    registry = CustomerRegistry()
-    profile: CustomerProfile | None = await registry.get(customer_id)
-    applications = profile.enabled_applications if profile else []
-    return CustomerApplicationsResponse(customer_id=customer_id, enabled_applications=applications)
+@router.get("/me/applications", response_model=CustomerApplicationsResponse)
+async def get_my_applications(
+    customer: CustomerProfile = Depends(get_current_customer),
+) -> CustomerApplicationsResponse:
+    """Applications enabled for the caller.
+
+    Deliberately has no path parameter: the old /widget/customer/{id} let anyone read
+    any tenant's application list. Taking the id from the token makes a cross-tenant
+    read unrepresentable rather than merely rejected.
+    """
+    return CustomerApplicationsResponse(
+        customer_id=customer.customer_id,
+        enabled_applications=customer.enabled_applications,
+    )
 
 
 class FeedbackRequest(BaseModel):
@@ -75,8 +91,15 @@ async def feedback(
     req: FeedbackRequest,
     qa: QAStore = Depends(get_qa_store),
     convs: ConversationStore = Depends(get_conversation_store),
+    customer: CustomerProfile = Depends(get_current_customer),
 ) -> dict:
     conv = await convs.load(req.conversation_id)
+    # Ownership check before anything is read out of the conversation: a QARecord copies
+    # the full transcript, so downvoting someone else's conversation would have pulled
+    # their messages into the Q&A store. 404 rather than 403 — a conversation you don't
+    # own shouldn't be confirmed to exist.
+    if conv.customer_id and conv.customer_id != customer.customer_id:
+        raise HTTPException(status_code=404, detail="conversation not found")
     idx = next(
         (i for i, t in enumerate(conv.turns) if t.id == req.message_id and t.role == "assistant"),
         None,
@@ -100,7 +123,7 @@ async def feedback(
             source="feedback",
             status="pending",
             bad_answer=bad_answer,
-            customer_id=conv.customer_id or None,
+            customer_id=customer.customer_id,
             conversation_id=req.conversation_id,
             feedback_message_id=req.message_id,
             transcript=_transcript(conv),

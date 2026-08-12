@@ -60,7 +60,13 @@ class Settings(BaseSettings):
     session_ttl_seconds: int = 3600
 
     zalo_cs_webhook_url: str | None = None
-    admin_token: str = "admin-secret"
+
+    # Auth. jwt_secret has no usable default on purpose — a shipped signing secret is
+    # the same class of bug as no auth at all, so server startup refuses to run without
+    # it (see server.py lifespan) rather than quietly signing tokens anyone can forge.
+    jwt_secret: str = ""
+    jwt_algorithm: str = "HS256"
+    jwt_expire_minutes: int = 1440  # 24h
 
     # comma-separated list of allowed CORS origins
     cors_allowed_origins: str = "http://localhost:3000"

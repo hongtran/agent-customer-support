@@ -3,11 +3,8 @@ from fastapi.testclient import TestClient
 
 from agent_customer_support.server import app
 from agent_customer_support.channels.deps import get_qa_store, get_qa_indexer
-from agent_customer_support.models import QARecord
 
 pytestmark = pytest.mark.asyncio
-
-HEADERS = {"X-Admin-Token": "test-admin-token"}
 
 
 class FakeQAStore:
@@ -53,34 +50,39 @@ def wired():
     app.dependency_overrides.clear()
 
 
-def test_requires_admin_token(wired):
+def test_requires_authentication(wired):
     _, _, client = wired
     assert client.get("/admin/qa").status_code == 401
 
 
-def test_create_list_and_approve_indexes(wired):
+def test_non_admin_role_is_forbidden(wired, as_user):
+    _, _, client = wired
+    assert client.get("/admin/qa").status_code == 403
+
+
+def test_create_list_and_approve_indexes(wired, as_admin):
     store, indexer, client = wired
-    r = client.post("/admin/qa", json={"question": "q1", "answer": "a1"}, headers=HEADERS)
+    r = client.post("/admin/qa", json={"question": "q1", "answer": "a1"})
     assert r.status_code == 200
     rid = r.json()["id"]
-    assert client.get("/admin/qa?status=pending", headers=HEADERS).json()[0]["id"] == rid
+    assert client.get("/admin/qa?status=pending").json()[0]["id"] == rid
 
-    appr = client.post(f"/admin/qa/{rid}/approve", json={}, headers=HEADERS)
+    appr = client.post(f"/admin/qa/{rid}/approve", json={})
     assert appr.status_code == 200
     assert appr.json()["status"] == "approved"
     assert indexer.upserted == [rid]
 
 
-def test_approve_empty_answer_409(wired):
+def test_approve_empty_answer_409(wired, as_admin):
     store, indexer, client = wired
-    r = client.post("/admin/qa", json={"question": "q-no-answer"}, headers=HEADERS)
+    r = client.post("/admin/qa", json={"question": "q-no-answer"})
     rid = r.json()["id"]
-    appr = client.post(f"/admin/qa/{rid}/approve", json={}, headers=HEADERS)
+    appr = client.post(f"/admin/qa/{rid}/approve", json={})
     assert appr.status_code == 409
     assert indexer.upserted == []
 
 
-def test_approve_indexing_failure_returns_502(wired):
+def test_approve_indexing_failure_returns_502(wired, as_admin):
     store, _, client = wired
 
     class FailingIndexer(FakeIndexer):
@@ -90,20 +92,20 @@ def test_approve_indexing_failure_returns_502(wired):
     failing_indexer = FailingIndexer()
     app.dependency_overrides[get_qa_indexer] = lambda: failing_indexer
 
-    r = client.post("/admin/qa", json={"question": "q", "answer": "a"}, headers=HEADERS)
+    r = client.post("/admin/qa", json={"question": "q", "answer": "a"})
     rid = r.json()["id"]
 
-    appr = client.post(f"/admin/qa/{rid}/approve", json={}, headers=HEADERS)
+    appr = client.post(f"/admin/qa/{rid}/approve", json={})
     assert appr.status_code == 502
     assert store.by_id[rid].status != "approved"
 
 
-def test_archive_deletes_point(wired):
+def test_archive_deletes_point(wired, as_admin):
     store, indexer, client = wired
-    r = client.post("/admin/qa", json={"question": "q", "answer": "a"}, headers=HEADERS)
+    r = client.post("/admin/qa", json={"question": "q", "answer": "a"})
     rid = r.json()["id"]
-    client.post(f"/admin/qa/{rid}/approve", json={}, headers=HEADERS)
-    arch = client.post(f"/admin/qa/{rid}/archive", json={}, headers=HEADERS)
+    client.post(f"/admin/qa/{rid}/approve", json={})
+    arch = client.post(f"/admin/qa/{rid}/archive", json={})
     assert arch.status_code == 200
     assert arch.json()["status"] == "archived"
     assert indexer.deleted == [rid]

@@ -40,7 +40,7 @@ def _make_conv():
     return Conversation(conversation_id="c1", customer_id="cust1", turns=[user, asst]), asst.id
 
 
-def test_feedback_down_creates_record():
+def test_feedback_down_creates_record(as_user):
     conv, asst_id = _make_conv()
     qa = FakeQAStore()
     app.dependency_overrides[get_conversation_store] = lambda: FakeConvStore(conv)
@@ -60,7 +60,7 @@ def test_feedback_down_creates_record():
     app.dependency_overrides.clear()
 
 
-def test_feedback_unknown_message_id_404():
+def test_feedback_unknown_message_id_404(as_user):
     conv, _ = _make_conv()
     app.dependency_overrides[get_conversation_store] = lambda: FakeConvStore(conv)
     app.dependency_overrides[get_qa_store] = lambda: FakeQAStore()
@@ -73,7 +73,7 @@ def test_feedback_unknown_message_id_404():
     app.dependency_overrides.clear()
 
 
-def test_feedback_repeat_does_not_duplicate():
+def test_feedback_repeat_does_not_duplicate(as_user):
     conv, asst_id = _make_conv()
     qa = FakeQAStore()
     app.dependency_overrides[get_conversation_store] = lambda: FakeConvStore(conv)

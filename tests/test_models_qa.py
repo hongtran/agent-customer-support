@@ -22,4 +22,4 @@ def test_qa_settings_present():
     s = Settings()
     assert s.table_qa == "acs_qa"
     assert s.qa_collection  # from QA_COLLECTION env stub
-    assert hasattr(s, "admin_token")
+    assert s.jwt_secret  # from JWT_SECRET env stub

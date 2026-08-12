@@ -1,7 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { listQA, createQA, approveQA, rejectQA, editQA } from "@/lib/api";
+import { logout, useSession } from "@/lib/useSession";
+import CustomerAdmin from "./CustomerAdmin";
 
 type Draft = { question: string; answer: string; application: string };
 
@@ -33,8 +37,12 @@ function SourceBadge({ source }: { source: string }) {
   );
 }
 
+type Tab = "qa" | "customers";
+
 export default function AdminPage() {
-  const [token, setToken] = useState("");
+  const router = useRouter();
+  const session = useSession();
+  const [tab, setTab] = useState<Tab>("qa");
   const [items, setItems] = useState<QA[]>([]);
   const [sel, setSel] = useState<QA | null>(null);
   const [error, setError] = useState("");
@@ -59,15 +67,15 @@ export default function AdminPage() {
     if (approve && !draft.answer.trim()) return;
     setBusy(true);
     try {
-      const rec = await createQA(token, {
+      const rec = await createQA({
         question: draft.question,
         answer: draft.answer,
         application: draft.application.trim() || null,
       });
-      if (approve) await approveQA(token, rec.id);
+      if (approve) await approveQA(rec.id);
       setCreating(false);
       setDraft(EMPTY_DRAFT);
-      await refresh(token);
+      await refresh();
     } catch (e) {
       setError(String(e));
     } finally {
@@ -76,17 +84,15 @@ export default function AdminPage() {
   }
 
   useEffect(() => {
-    const t = localStorage.getItem("adminToken") || "";
-    setToken(t);
-    if (t) refresh(t);
+    if (session.status === "ready" && session.me.role === "admin") refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [session.status]);
 
-  async function refresh(t: string) {
+  async function refresh() {
     setLoading(true);
     try {
       setError("");
-      setItems(await listQA(t, "pending"));
+      setItems(await listQA("pending"));
     } catch (e) {
       setError(String(e));
     } finally {
@@ -94,19 +100,14 @@ export default function AdminPage() {
     }
   }
 
-  function saveToken() {
-    localStorage.setItem("adminToken", token);
-    refresh(token);
-  }
-
   async function onApprove() {
     if (!sel || busy) return;
     setBusy(true);
     try {
-      await editQA(token, sel.id, { answer: sel.answer, application: sel.application ?? null });
-      await approveQA(token, sel.id);
+      await editQA(sel.id, { answer: sel.answer, application: sel.application ?? null });
+      await approveQA(sel.id);
       setSel(null);
-      await refresh(token);
+      await refresh();
     } catch (e) {
       setError(String(e));
     } finally {
@@ -118,9 +119,9 @@ export default function AdminPage() {
     if (!sel || busy) return;
     setBusy(true);
     try {
-      await rejectQA(token, sel.id);
+      await rejectQA(sel.id);
       setSel(null);
-      await refresh(token);
+      await refresh();
     } catch (e) {
       setError(String(e));
     } finally {
@@ -128,29 +129,62 @@ export default function AdminPage() {
     }
   }
 
+  if (session.status === "loading") {
+    return <div className="flex h-screen items-center justify-center text-sm text-gray-400">…</div>;
+  }
+
+  // The API enforces this too; this just avoids showing an admin console that will
+  // 403 on every call.
+  if (session.me.role !== "admin") {
+    return (
+      <div className="flex h-screen flex-col items-center justify-center gap-3 text-sm text-gray-500">
+        <p>Tài khoản này không có quyền quản trị.</p>
+        <Link href="/" className="text-blue-600 hover:text-blue-700">
+          ← Quay lại trang chat
+        </Link>
+      </div>
+    );
+  }
+
+  const tabCls = (t: Tab) =>
+    `rounded px-3 py-1 text-xs font-medium transition-colors ${
+      tab === t ? "bg-blue-100 text-blue-700" : "text-gray-500 hover:bg-gray-200"
+    }`;
+
   return (
     <div className="flex h-screen flex-col bg-white text-gray-800">
       {/* Header */}
       <header className="flex items-center gap-3 border-b border-gray-200 bg-gray-50 px-4 py-3">
-        <h1 className="text-sm font-semibold text-gray-700">Q&amp;A Curation</h1>
+        <h1 className="text-sm font-semibold text-gray-700">CenLab Admin</h1>
+        <nav className="flex items-center gap-1">
+          <button onClick={() => setTab("qa")} className={tabCls("qa")}>
+            Q&amp;A
+          </button>
+          <button onClick={() => setTab("customers")} className={tabCls("customers")}>
+            Khách hàng
+          </button>
+        </nav>
         <div className="ml-auto flex items-center gap-2">
-          <input
-            type="password"
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && saveToken()}
-            placeholder="Admin token"
-            className="w-56 rounded border border-gray-300 px-2 py-1 font-mono text-xs focus:outline-none focus:ring-1 focus:ring-blue-400"
-          />
-          <button
-            onClick={saveToken}
-            className="rounded bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700"
+          <span className="text-xs text-gray-500">{session.me.name}</span>
+          <Link
+            href="/"
+            className="rounded bg-gray-200 px-3 py-1 text-xs text-gray-700 hover:bg-gray-300"
           >
-            Load
+            Chat
+          </Link>
+          <button
+            onClick={() => logout(router)}
+            className="rounded px-3 py-1 text-xs text-gray-500 hover:text-gray-700"
+          >
+            Đăng xuất
           </button>
         </div>
       </header>
 
+      {tab === "customers" ? (
+        <CustomerAdmin />
+      ) : (
+        <>
       {error && (
         <div className="border-b border-rose-200 bg-rose-50 px-4 py-2 text-xs text-rose-700">{error}</div>
       )}
@@ -165,14 +199,13 @@ export default function AdminPage() {
             <div className="flex items-center gap-3">
               <button
                 onClick={startCreate}
-                disabled={!token}
                 className="text-xs font-medium text-blue-600 hover:text-blue-700 disabled:opacity-40"
               >
                 + New Q&amp;A
               </button>
               <button
-                onClick={() => refresh(token)}
-                disabled={!token || loading}
+                onClick={() => refresh()}
+                disabled={loading}
                 className="text-xs text-gray-400 hover:text-gray-600 disabled:opacity-40"
               >
                 {loading ? "…" : "Refresh"}
@@ -182,7 +215,7 @@ export default function AdminPage() {
           <ul className="flex-1 overflow-y-auto p-2">
             {items.length === 0 && !loading && (
               <li className="px-2 py-6 text-center text-xs text-gray-400">
-                {token ? "Không có câu hỏi nào đang chờ." : "Nhập admin token để bắt đầu."}
+                Không có câu hỏi nào đang chờ.
               </li>
             )}
             {items.map((it) => {
@@ -353,6 +386,8 @@ export default function AdminPage() {
           )}
         </section>
       </div>
+        </>
+      )}
     </div>
   );
 }
