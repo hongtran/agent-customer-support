@@ -1,5 +1,6 @@
 import logging
 
+from agent_customer_support import doc_images
 from agent_customer_support.agents.context import TurnContext
 from agent_customer_support.agents.escalation import EscalationAgent
 from agent_customer_support.agents.flow import FlowAgent
@@ -21,6 +22,7 @@ from agent_customer_support.rag_client import RagClient
 from agent_customer_support.stores.attachment_store import AttachmentStore
 from agent_customer_support.stores.conversation_store import ConversationStore
 from agent_customer_support.stores.customer_registry import CustomerRegistry
+from agent_customer_support.stores.doc_image_store import DocImageStore
 from agent_customer_support.stores.flow_store import FlowStore
 from agent_customer_support.stores.request_backlog import RequestBacklog
 from agent_customer_support.stores.qa_store import QAStore
@@ -42,6 +44,7 @@ class Coordinator:
         self.backlog = RequestBacklog()
         self.qa_store = QAStore()
         self.attachments = AttachmentStore()
+        self.doc_images = DocImageStore()
         self.sessions = SessionStore()
         self.rag = RagClient()
         self.escalator = Escalator()
@@ -92,6 +95,7 @@ class Coordinator:
                 attachments=attachments,
                 transcript=transcript + f"\nuser: {message}",
                 rag=self.rag,
+                doc_images=self.doc_images,
                 flow_store=self.flow_store,
                 backlog=self.backlog,
                 qa_store=self.qa_store,
@@ -205,12 +209,35 @@ class Coordinator:
         )
         return ChatResponse(
             conversation_id=ctx.session.conversation_id,
-            reply=result.reply,
+            reply=await self._resolve_images(result.reply),
             escalated=result.escalated,
             citations=result.citations,
             message_id=assistant_turn.id,
             attachments=await self._presign(user_turn.attachments),
         )
+
+    async def _resolve_images(self, reply: str) -> str:
+        """Swap image markers for presigned URLs, for the response only.
+
+        The turn was already persisted above with markers intact — deliberately, because a
+        presigned URL expires: storing one would archive a dead link and feed 500
+        characters of signature into the transcript the LLM re-reads next turn. Same
+        split as StoredAttachment/AttachmentRef, and it means re-rendering history later
+        is just re-signing.
+
+        Runs after the output guardrail so the guardrail judges prose, not signatures.
+        Never raises: a signing problem drops the picture, never the answer.
+        """
+        try:
+            urls = {}
+            for kind, slug, name in doc_images.markers_in(reply):
+                urls[(slug, name)] = await self.doc_images.presign(slug, name)
+            if not urls:
+                return reply
+            return doc_images.presign_markers(reply, lambda s, n: urls[(s, n)])
+        except Exception as exc:  # noqa: BLE001 - degrade, never break a generated reply
+            logger.warning("doc image presign failed, replying without images: %s", exc)
+            return doc_images.strip(reply)
 
     async def _store_attachments(self, ctx: TurnContext, turn_id: str) -> list[StoredAttachment]:
         """Upload this turn's images to S3 and return their keys.

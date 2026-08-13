@@ -12,6 +12,7 @@ from agent_customer_support.agents.prompts import (
     KNOWLEDGE_RESUME_NO_CLARIFY,
     PROCESS_BLOCK,
 )
+from agent_customer_support import doc_images
 from agent_customer_support.config import Settings, get_settings
 from agent_customer_support.llm import complete_text
 from agent_customer_support.llm.normalize import (
@@ -54,8 +55,10 @@ def parse_markers(text: str) -> tuple[str, str | None, str | None]:
     if _NO_ANSWER_RE.search(text or ""):
         clean = _scrub_markers(text or "")
         # If the model wrote substantial content AND appended [[no_answer]], the marker
-        # is a spurious hedge — trust the content and treat it as a valid answer.
-        if len(clean) > 80:
+        # is a spurious hedge — trust the content and treat it as a valid answer. Measured
+        # on the prose only: image markers are ~40 chars each, so counting them could tip
+        # a one-line hedge over the threshold and suppress a real miss.
+        if len(doc_images.strip(clean)) > 80:
             return clean, None, None
         return clean, "no_answer", None
     return (text or "").strip(), None, None
@@ -175,6 +178,31 @@ class KnowledgeAgent:
             logger.warning("qa search failed, using product-only: %s", exc)
             return {"passages": [], "citations": [], "top_confidence": 0.0}
 
+    async def _with_images(
+        self, ctx: TurnContext, passages: list[str], metas: list[dict]
+    ) -> tuple[list[str], dict[str, set[str]]]:
+        """Rewrite the guides' `media/…` refs into scoped, whitelisted image markers.
+
+        Returns the rewritten passages and the catalog they were rewritten against. The
+        catalog is not a by-product: it is the whitelist the composed reply is checked
+        against afterwards, so a model that invents an image number cannot get a URL
+        signed for a file that does not exist.
+
+        Only the product passages go through this — Q&A records are CS-authored prose and
+        carry no refs. Availability is looked up per application, and only for documents
+        whose passages actually contain a ref, so image-less guides cost nothing.
+
+        Never raises: without a store handle (or on any store trouble) the refs are simply
+        dropped and the answer is text-only, which is the same outcome as a document whose
+        media has not been uploaded yet.
+        """
+        catalog: dict[str, set[str]] = {}
+        if ctx.doc_images:
+            slugs = doc_images.slugs_with_refs(passages, metas)
+            if slugs:
+                catalog = await ctx.doc_images.catalog(slugs)
+        return doc_images.rewrite_passages(passages, metas, catalog), catalog
+
     async def run(self, ctx: TurnContext) -> AgentResult:
         """
         Single-attempt pipeline:
@@ -201,6 +229,7 @@ class KnowledgeAgent:
         )
         passages = res.get("passages", []) or []
         citations = res.get("citations", []) or []
+        passages, image_catalog = await self._with_images(ctx, passages, res.get("metas", []) or [])
 
         qa_res = await self._safe_qa_search(ctx, query, applications, cfg)
         qa_passages = qa_res.get("passages", []) or []
@@ -225,6 +254,12 @@ class KnowledgeAgent:
             qa_leads=qa_leads,
         )
         clean, kind, application = parse_markers(composed)
+        # Enforce the image contract on whatever the composer produced: only markers this
+        # turn's passages actually offered survive, deduped and capped. Checked against the
+        # same catalog the passages were rewritten against, so an invented image number is
+        # dropped rather than signed. Done here rather than in _finish so a hallucinated
+        # image never reaches the persisted turn.
+        clean = doc_images.select(clean, image_catalog, cfg.max_reply_images)
 
         if kind == "suspected_bug":
             return AgentResult(

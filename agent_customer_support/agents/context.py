@@ -19,6 +19,7 @@ class TurnContext:
     transcript: str = ""
     # shared service handles (typed Any to avoid import cycles with stores)
     rag: Any = None
+    doc_images: Any = None
     flow_store: Any = None
     backlog: Any = None
     qa_store: Any = None
