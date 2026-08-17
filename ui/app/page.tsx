@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import ConfigBar from "@/components/ConfigBar";
+import ConfigBar, { needsApplicationChoice } from "@/components/ConfigBar";
 import MessageList, { Message } from "@/components/MessageList";
 import InputBar from "@/components/InputBar";
 import { sendMessage, sendFeedback, Attachment, UnauthorizedError } from "@/lib/api";
@@ -72,6 +72,13 @@ export default function Home() {
     return <div className="flex h-screen items-center justify-center text-sm text-gray-400">…</div>;
   }
 
+  // The picker in ConfigBar owns this rule; the composer only mirrors it, so both
+  // read it from the same place instead of each deciding what "not chosen" means.
+  const mustChooseApplication = needsApplicationChoice(
+    session.me.enabled_applications,
+    selectedApplications
+  );
+
   return (
     <div className="flex h-screen flex-col">
       <ConfigBar
@@ -84,7 +91,13 @@ export default function Home() {
         onLogout={() => logout(router)}
       />
       <MessageList messages={messages} loading={loading} onFeedbackDown={handleFeedbackDown} />
-      <InputBar onSend={handleSend} disabled={loading} />
+      <InputBar
+        onSend={handleSend}
+        disabled={loading}
+        blockedReason={
+          mustChooseApplication ? "Chọn ứng dụng ở trên trước khi đặt câu hỏi…" : undefined
+        }
+      />
     </div>
   );
 }

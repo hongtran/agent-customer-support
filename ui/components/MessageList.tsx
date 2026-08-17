@@ -347,6 +347,23 @@ function Markdown({ text }: { text: string }) {
   );
 }
 
+/**
+ * The agent's avatar. A plain `<img>` rather than `next/image`: it is a fixed 24px
+ * square served from `public/`, so the optimizer has nothing to do and would only
+ * add a request. `cenlab-mark.png` is the logo cropped to the graphic — the full
+ * lockup carries a wordmark that is unreadable at this size.
+ */
+function AgentAvatar() {
+  return (
+    // eslint-disable-next-line @next/next/no-img-element -- fixed 24px static asset; the optimizer has nothing to do here.
+    <img
+      src="/cenlab-mark.png"
+      alt="CenLab"
+      className="mt-1 h-6 w-6 shrink-0 select-none rounded-full border border-gray-200 bg-white object-contain p-0.5"
+    />
+  );
+}
+
 /** Thumbs-up outline; the dislike button reuses it rotated 180°. */
 function ThumbIcon({ filled }: { filled: boolean }) {
   return (
@@ -366,6 +383,31 @@ function ThumbIcon({ filled }: { filled: boolean }) {
   );
 }
 
+/** Two overlapping sheets for "copy", swapped for a tick once the copy lands. */
+function CopyIcon({ done }: { done: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className="h-4 w-4"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {done ? (
+        <path d="m20 6-11 11-5-5" />
+      ) : (
+        <>
+          <rect x="9" y="9" width="12" height="12" rx="2" />
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+        </>
+      )}
+    </svg>
+  );
+}
+
 export default function MessageList({ messages, loading, onFeedbackDown }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
   // Per-message selection, keyed by messageId. undefined = nothing picked yet.
@@ -376,10 +418,31 @@ export default function MessageList({ messages, loading, onFeedbackDown }: Props
   // Stable identity: it is the context value, so a new function each render would
   // re-render every image in the thread.
   const closeZoom = useCallback(() => setZoomed(null), []);
+  // Id of the message whose text was just copied, so only that row shows the tick.
+  const [copied, setCopied] = useState<string | null>(null);
+  const copyTimer = useRef<ReturnType<typeof setTimeout>>();
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
+
+  useEffect(() => () => clearTimeout(copyTimer.current), []);
+
+  /**
+   * `navigator.clipboard` needs a secure context — fine on localhost and https,
+   * absent over plain http. Failing silently is deliberate: the button is a
+   * convenience, and the message text is on screen either way.
+   */
+  const handleCopy = async (messageId: string, content: string) => {
+    try {
+      await navigator.clipboard.writeText(content);
+    } catch {
+      return;
+    }
+    setCopied(messageId);
+    clearTimeout(copyTimer.current);
+    copyTimer.current = setTimeout(() => setCopied(null), 1500);
+  };
 
   const handleFeedback = (messageId: string, signal: FeedbackSignal) => {
     const next = feedback[messageId] === signal ? undefined : signal; // click again to clear
@@ -438,9 +501,7 @@ export default function MessageList({ messages, loading, onFeedbackDown }: Props
           return (
             <div key={i} className="flex justify-start">
               <div className="flex gap-2 max-w-[80%]">
-                <div className="w-6 h-6 rounded-full bg-gray-200 flex items-center justify-center text-xs shrink-0 mt-1 select-none">
-                  🤖
-                </div>
+                <AgentAvatar />
                 <div className="flex flex-col gap-0.5">
                   <div className="rounded-2xl rounded-tl-sm px-4 py-2 text-sm bg-gray-100 text-gray-800">
                     <Markdown text={msg.content} />
@@ -449,31 +510,47 @@ export default function MessageList({ messages, loading, onFeedbackDown }: Props
                     <div className="flex items-center gap-1 pl-1 h-7">
                       <button
                         type="button"
-                        aria-label="Hữu ích"
                         title="Hữu ích"
                         aria-pressed={feedback[msg.messageId] === "up"}
                         onClick={() => handleFeedback(msg.messageId!, "up")}
-                        className={`rounded-md p-1 transition-colors ${
+                        className={`flex items-center gap-1 rounded-md px-1.5 py-1 text-xs transition-colors ${
                           feedback[msg.messageId] === "up"
                             ? "text-blue-600 bg-blue-50"
                             : "text-gray-400 hover:text-gray-600 hover:bg-gray-100"
                         }`}
                       >
                         <ThumbIcon filled={feedback[msg.messageId] === "up"} />
+                        Hữu ích
                       </button>
                       <button
                         type="button"
-                        aria-label="Không hữu ích"
-                        title="Không hữu ích"
+                        title="Chưa đúng"
                         aria-pressed={feedback[msg.messageId] === "down"}
                         onClick={() => handleFeedback(msg.messageId!, "down")}
-                        className={`rounded-md p-1 rotate-180 transition-colors ${
+                        className={`flex items-center gap-1 rounded-md px-1.5 py-1 text-xs transition-colors ${
                           feedback[msg.messageId] === "down"
                             ? "text-red-500 bg-red-50"
                             : "text-gray-400 hover:text-gray-600 hover:bg-gray-100"
                         }`}
                       >
-                        <ThumbIcon filled={feedback[msg.messageId] === "down"} />
+                        {/* Only the glyph flips; rotating the label would mirror the text. */}
+                        <span className="rotate-180">
+                          <ThumbIcon filled={feedback[msg.messageId] === "down"} />
+                        </span>
+                        Chưa đúng
+                      </button>
+                      <button
+                        type="button"
+                        title="Sao chép câu trả lời"
+                        onClick={() => handleCopy(msg.messageId!, msg.content)}
+                        className={`flex items-center gap-1 rounded-md px-1.5 py-1 text-xs transition-colors ${
+                          copied === msg.messageId
+                            ? "text-emerald-600 bg-emerald-50"
+                            : "text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+                        }`}
+                      >
+                        <CopyIcon done={copied === msg.messageId} />
+                        {copied === msg.messageId ? "Đã chép" : "Sao chép"}
                       </button>
                     </div>
                   )}
@@ -495,9 +572,7 @@ export default function MessageList({ messages, loading, onFeedbackDown }: Props
       {loading && (
         <div className="flex justify-start">
           <div className="flex gap-2">
-            <div className="w-6 h-6 rounded-full bg-gray-200 flex items-center justify-center text-xs shrink-0 mt-1 select-none">
-              🤖
-            </div>
+            <AgentAvatar />
             <div className="rounded-2xl rounded-tl-sm bg-gray-100 px-4 py-2">
               <span className="flex gap-1">
                 <span className="animate-bounce text-gray-400" style={{ animationDelay: "0ms" }}>●</span>

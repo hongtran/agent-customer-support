@@ -6,6 +6,13 @@ import { Attachment } from "@/lib/api";
 interface Props {
   onSend: (text: string, attachments: Attachment[]) => void;
   disabled: boolean;
+  /**
+   * Set when something upstream must happen before the user can ask anything —
+   * currently only "pick an application". The string doubles as the placeholder, so
+   * the reason for the lock is stated where the user is about to type rather than
+   * only in a banner further up the page.
+   */
+  blockedReason?: string;
 }
 
 async function fileToBase64(file: File): Promise<string> {
@@ -16,11 +23,12 @@ async function fileToBase64(file: File): Promise<string> {
   return btoa(binary);
 }
 
-export default function InputBar({ onSend, disabled }: Props) {
+export default function InputBar({ onSend, disabled, blockedReason }: Props) {
   const [value, setValue] = useState("");
   const [pending, setPending] = useState<Attachment[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const locked = disabled || blockedReason !== undefined;
 
   useEffect(() => {
     const el = textareaRef.current;
@@ -31,7 +39,7 @@ export default function InputBar({ onSend, disabled }: Props) {
 
   const submit = () => {
     const text = value.trim();
-    if ((!text && pending.length === 0) || disabled) return;
+    if ((!text && pending.length === 0) || locked) return;
     onSend(text, pending);
     setValue("");
     setPending([]);
@@ -88,8 +96,8 @@ export default function InputBar({ onSend, disabled }: Props) {
         />
         <button
           onClick={() => fileInputRef.current?.click()}
-          disabled={disabled}
-          title="Attach image"
+          disabled={locked}
+          title="Đính kèm ảnh"
           className="rounded-xl border border-gray-300 px-3 py-2 text-sm text-gray-600 hover:bg-gray-100 disabled:opacity-50"
         >
           📎
@@ -99,9 +107,11 @@ export default function InputBar({ onSend, disabled }: Props) {
           rows={1}
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          disabled={disabled}
-          placeholder="Type a message…"
-          className="flex-1 resize-none overflow-y-auto rounded-xl border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-50"
+          disabled={locked}
+          placeholder={blockedReason ?? "Nhập câu hỏi của bạn…"}
+          className={`flex-1 resize-none overflow-y-auto rounded-xl border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-50 ${
+            blockedReason ? "border-amber-300 bg-amber-50" : "border-gray-300"
+          }`}
           style={{ maxHeight: "120px" }}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
@@ -112,10 +122,10 @@ export default function InputBar({ onSend, disabled }: Props) {
         />
         <button
           onClick={submit}
-          disabled={disabled || (value.trim() === "" && pending.length === 0)}
+          disabled={locked || (value.trim() === "" && pending.length === 0)}
           className="rounded-xl bg-blue-500 px-4 py-2 text-sm text-white hover:bg-blue-600 disabled:opacity-50"
         >
-          Send
+          Gửi
         </button>
       </div>
     </div>
