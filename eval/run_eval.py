@@ -4,6 +4,8 @@
     poetry run python -m eval.run_eval --mode retrieval     # no LLM cost
     poetry run python -m eval.run_eval --limit 10           # smoke test
     poetry run python -m eval.run_eval --no-scope           # A/B the application filter
+    poetry run python -m eval.run_eval --mode answer \
+        --model gpt-5.4-mini --judge-model gpt-5.4-mini     # A/B a model on quality + cost
 
 Per-row results land in `eval/results/<mode>-<timestamp>.csv`; the summary prints
 to stdout.
@@ -18,11 +20,20 @@ Scoring rules worth knowing before reading the numbers:
     exercises KnowledgeAgent directly and does not run the guardrail, so those
     rows measure the second line of defence: what the RAG layer does if an
     off-topic question reaches it.
+  * Cost and latency cover *all* rows that ran, adversarial ones included -- a
+    refusal costs money too. Agent spend and judge spend are reported separately:
+    the judge is pinned and runs on every row whatever model is under test, so
+    merging them would add a constant that hides the difference being measured.
+    Prices come from `eval/pricing.json`; a model missing from it is reported as
+    unpriced and excluded, never billed at zero.
 """
 
 import argparse
 import asyncio
 import csv
+import json
+import math
+import os
 import statistics
 import sys
 import time
@@ -31,6 +42,7 @@ from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
+from agent_customer_support.config import get_settings
 from agent_customer_support.rag_client import RagClient
 from eval.eval import (
     DEFAULT_K,
@@ -39,11 +51,26 @@ from eval.eval import (
     RetrievalEval,
     evaluate_answer,
     evaluate_retrieval,
+    fmt_usd,
     judge_model,
 )
-from eval.testset import TestQuestion, load_tests
+from eval.pricing import cost_by_model
+from eval.testset import TEST_FILE, TestQuestion, load_tests
 
 RESULTS_DIR = Path(__file__).parent / "results"
+
+# Every model knob in Settings. `--model` sets all of them, so a run is one model
+# end to end -- otherwise the cost number mixes the answer model with whatever
+# `KNOWLEDGE_CONTEXTUALIZE_MODEL` happens to be, and two runs are not comparable.
+_MODEL_ENV_VARS = (
+    "AGENT_MODEL",
+    "TRIAGE_MODEL",
+    "KNOWLEDGE_MODEL",
+    "KNOWLEDGE_CONTEXTUALIZE_MODEL",
+    "VERIFICATION_MODEL",
+    "FLOW_MODEL",
+    "GUARDRAIL_MODEL",
+)
 
 
 # --------------------------------------------------------------------------
@@ -129,6 +156,19 @@ async def _one(test: TestQuestion, mode: str, k: int, scope: bool) -> dict:
             # Distinct from the retrieval block's `citations`: this is what the agent
             # attached to its reply, which also carries `qa:`-prefixed Q&A hits.
             "answer_citations": "|".join(run.citations),
+            # Cost/latency of the agent under test, kept apart from the judge's own
+            # spend so a model comparison is not diluted by the fixed judge.
+            "latency_s": round(run.cost.latency_s, 3),
+            "llm_calls": run.cost.n_calls,
+            "input_tokens": run.cost.input_tokens,
+            "output_tokens": run.cost.output_tokens,
+            "cost_usd": run.cost.cost_usd,
+            "models_used": json.dumps(run.cost.models, ensure_ascii=False),
+            "judge_latency_s": round(verdict.cost.latency_s, 3),
+            "judge_input_tokens": verdict.cost.input_tokens,
+            "judge_output_tokens": verdict.cost.output_tokens,
+            "judge_cost_usd": verdict.cost.cost_usd,
+            "judge_models_used": json.dumps(verdict.cost.models, ensure_ascii=False),
         }
     return row
 
@@ -273,6 +313,94 @@ def _answer_block(rows: list[dict]) -> dict:
     }
 
 
+def _merge_models(rows: list[dict], column: str) -> dict[str, list[int]]:
+    """Sum the per-row `model -> [in, out, calls]` maps into one."""
+    totals: dict[str, list[int]] = {}
+    for r in rows:
+        for model, counts in json.loads(r.get(column) or "{}").items():
+            entry = totals.setdefault(model, [0, 0, 0])
+            for i in range(3):
+                entry[i] += counts[i]
+    return totals
+
+
+def _percentile(values: list[float], pct: float) -> float:
+    """Nearest-rank percentile: the smallest value at or above `pct` of the sample.
+
+    No interpolation -- a latency percentile should be a latency that actually
+    happened. Rank is `ceil(pct/100 * n)`, 1-based, so p50 of [3, 9] is 3 and p95 is 9.
+    """
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    rank = max(1, math.ceil(pct / 100 * len(ordered)))
+    return ordered[min(rank, len(ordered)) - 1]
+
+
+def cost_section(rows: list[dict], wall_s: float, concurrency: int) -> tuple[str, list[str]]:
+    """COST & LATENCY block, plus the models that burned tokens with no price entry.
+
+    Cost is recomputed from the *summed* token counts rather than by adding the
+    per-row costs: an unpriced model yields None per row, and summing Nones would
+    either crash or quietly read as zero. Summing tokens first keeps the priced part
+    exact and the unpriced part visible.
+    """
+    if not rows:
+        return "", []
+
+    agent_models = _merge_models(rows, "models_used")
+    judge_models = _merge_models(rows, "judge_models_used")
+    agent_cost, agent_unpriced = cost_by_model(agent_models)
+    judge_cost, judge_unpriced = cost_by_model(judge_models)
+
+    n = len(rows)
+    tokens_in = sum(int(r.get("input_tokens") or 0) for r in rows)
+    tokens_out = sum(int(r.get("output_tokens") or 0) for r in rows)
+    calls = sum(int(r.get("llm_calls") or 0) for r in rows)
+    latencies = [float(r.get("latency_s") or 0.0) for r in rows]
+
+    total = (
+        None if agent_cost is None and judge_cost is None else (agent_cost or 0) + (judge_cost or 0)
+    )
+    per_row = None if agent_cost is None else agent_cost / n
+
+    out = ["\nCOST & LATENCY (all evaluated rows)", "-" * 64]
+    out.append(f"  rows                      {n:>10d}")
+    out.append(
+        f"  agent cost                {fmt_usd(agent_cost):>10}"
+        f"     judge {fmt_usd(judge_cost)}     total {fmt_usd(total)}"
+    )
+    out.append(f"  agent cost / row          {fmt_usd(per_row, 6):>10}")
+    if per_row:
+        out.append(f"  agent cost / 1000 rows    {fmt_usd(per_row * 1000, 2):>10}")
+    out.append(
+        f"  tokens in / out           {tokens_in:>10,} / {tokens_out:,}"
+        f"     ({tokens_in / n:,.0f} / {tokens_out / n:,.0f} per row)"
+    )
+    out.append(f"  llm calls / row           {calls / n:>10.2f}")
+    out.append(
+        f"  latency mean/p50/p95      {_mean(latencies):>10.2f}s"
+        f"    {_percentile(latencies, 50):.2f}s  {_percentile(latencies, 95):.2f}s"
+    )
+    out.append(f"  wall clock                {wall_s:>10.0f}s     (concurrency {concurrency})")
+
+    out.append("\n  by model (input / output tokens, calls, cost)")
+    for label, models in (("agent", agent_models), ("judge", judge_models)):
+        for model, (t_in, t_out, n_calls) in sorted(models.items()):
+            one, _ = cost_by_model({model: [t_in, t_out, n_calls]})
+            out.append(
+                f"    {label:<6}{model:<28}{t_in:>10,} /{t_out:>9,}{n_calls:>7}   {fmt_usd(one)}"
+            )
+
+    unpriced = sorted(set(agent_unpriced) | set(judge_unpriced))
+    if unpriced:
+        out.append("")
+        out.append("  !! NO PRICE ENTRY in eval/pricing.json -- cost above EXCLUDES these:")
+        for model in unpriced:
+            out.append(f"       {model}")
+    return "\n".join(out), unpriced
+
+
 def _table(title: str, blocks: dict[str, dict]) -> str:
     if not blocks:
         return ""
@@ -286,13 +414,28 @@ def _table(title: str, blocks: dict[str, dict]) -> str:
     return "\n".join(lines)
 
 
-def summarise(rows: list[dict], mode: str, k: int, scope: bool, detail: str = "none") -> str:
+def summarise(
+    rows: list[dict],
+    mode: str,
+    k: int,
+    scope: bool,
+    detail: str = "none",
+    tests_file: str = "",
+    wall_s: float = 0.0,
+    concurrency: int = 1,
+) -> str:
     ok = [r for r in rows if "error" not in r]
     errors = [r for r in rows if "error" in r]
+    cfg = get_settings()
     out: list[str] = []
 
     out.append("=" * 80)
-    out.append(f"RAG EVALUATION  |  mode={mode}  top_k={k}  scoped={scope}  judge={judge_model()}")
+    out.append(f"RAG EVALUATION  |  mode={mode}  top_k={k}  scoped={scope}")
+    out.append(
+        f"agent={cfg.model_for('knowledge')}  contextualize="
+        f"{cfg.model_for('knowledge_contextualize')}  judge={judge_model()}"
+    )
+    out.append(f"tests={tests_file or TEST_FILE}")
     out.append(f"rows={len(rows)}  ok={len(ok)}  errors={len(errors)}")
     out.append("=" * 80)
 
@@ -378,6 +521,12 @@ def summarise(rows: list[dict], mode: str, k: int, scope: bool, detail: str = "n
         for r in errors:
             out.append(f"  {r['id']}  {r['error']}")
 
+    # Adversarial rows are billed too -- you pay for a refusal -- so the cost block
+    # covers every row that ran, not just the answerable ones.
+    if mode in ("answer", "both") and ok:
+        block, _unpriced = cost_section(ok, wall_s, concurrency)
+        out.append(block)
+
     if mode in ("answer", "both"):
         weak = sorted(
             (r for r in ok if r["answerable"]),
@@ -430,9 +579,35 @@ def main() -> None:
         default="none",
         help="per-question retrieval output: table of scores, or full keyword/chunk breakdown",
     )
+    ap.add_argument(
+        "--tests",
+        default=TEST_FILE,
+        help=f"test-set CSV (default {Path(TEST_FILE).name})",
+    )
+    ap.add_argument(
+        "--model",
+        help="run the whole pipeline on this model (overrides AGENT_MODEL and every "
+        "per-agent override) so an A/B compares like with like",
+    )
+    ap.add_argument(
+        "--judge-model",
+        help="model for the LLM judge (sets EVAL_JUDGE_MODEL); pin it while swapping --model",
+    )
     args = ap.parse_args()
 
-    tests = load_tests(application=args.application)
+    # Set before the worker pool exists: `spawn` and `fork` both hand os.environ to
+    # children, and pydantic-settings reads the environment ahead of `.env` (which
+    # eval/__init__.py loads with override=False), so these win. `get_settings` is
+    # lru_cached, and at --concurrency 1 the parent's cache may already be warm.
+    if args.model:
+        for var in _MODEL_ENV_VARS:
+            os.environ[var] = args.model
+    if args.judge_model:
+        os.environ["EVAL_JUDGE_MODEL"] = args.judge_model
+    if args.model or args.judge_model:
+        get_settings.cache_clear()
+
+    tests = load_tests(path=args.tests, application=args.application)
     if not tests:
         print(f"No rows matched --application {args.application!r}", file=sys.stderr)
         sys.exit(1)
@@ -441,21 +616,46 @@ def main() -> None:
     scope = not args.no_scope
 
     scope_note = f", application={args.application}" if args.application else ""
+    model_note = f", model={args.model}" if args.model else ""
     print(
-        f"Running {len(tests)} tests (mode={args.mode}, k={args.k}, scoped={scope}{scope_note})",
+        f"Running {len(tests)} tests (mode={args.mode}, k={args.k}, scoped={scope}"
+        f"{scope_note}{model_note}, tests={Path(args.tests).name})",
         file=sys.stderr,
     )
+    started = time.monotonic()
     rows = run_all(tests, args.mode, args.k, scope, args.concurrency)
+    wall_s = time.monotonic() - started
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     suffix = "" if scope else "-noscope"
     out = Path(args.out) if args.out else RESULTS_DIR / f"{args.mode}{suffix}-{stamp}.csv"
     write_rows(rows, out)
 
-    report = summarise(rows, args.mode, args.k, scope, args.detail)
+    report = summarise(
+        rows,
+        args.mode,
+        args.k,
+        scope,
+        args.detail,
+        tests_file=args.tests,
+        wall_s=wall_s,
+        concurrency=args.concurrency,
+    )
     print(report)
     print(f"\nPer-row results: {out}")
     out.with_suffix(".txt").write_text(report, encoding="utf-8")
+
+    # Repeat the unpriced warning on stderr: the report is long and this one silently
+    # makes the cost number too low, so it must not scroll past unnoticed.
+    ok = [r for r in rows if "error" not in r]
+    if args.mode in ("answer", "both") and ok:
+        _, unpriced = cost_section(ok, wall_s, args.concurrency)
+        if unpriced:
+            print(
+                f"\nWARNING: no price entry in eval/pricing.json for: {', '.join(unpriced)}\n"
+                "         Reported cost excludes them. Add them and re-read the report.",
+                file=sys.stderr,
+            )
 
 
 if __name__ == "__main__":
