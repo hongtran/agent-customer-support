@@ -56,6 +56,19 @@ class Settings(BaseSettings):
     # own per-image ceiling, so anything larger would fail downstream anyway.
     max_attachment_bytes: int = 5 * 1024 * 1024
 
+    # Document images (S3, read-only). Screenshots and button glyphs extracted from the
+    # source user guides, keyed by application slug: <prefix>/<slug>/imageNN.png. A
+    # separate bucket from s3_bucket_attachments on purpose — user uploads are private
+    # per-conversation data, these are shared assets with a different lifecycle.
+    s3_bucket_doc_images: str = "elsa-enterprise-llm-service-local"
+    doc_images_prefix: str = "doc_images"
+    # Which names exist under a slug is read from S3 and cached in-process. The bucket
+    # only changes when a document is re-ingested, so a coarse TTL is fine and keeps
+    # this to one listing per application per process.
+    doc_images_cache_seconds: int = 600
+    # Ceiling on how many images one reply may carry, applied after composition.
+    max_reply_images: int = 5
+
     redis_url: str = "redis://localhost:6379/0"
     session_ttl_seconds: int = 3600
 

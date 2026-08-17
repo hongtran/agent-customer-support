@@ -1,6 +1,7 @@
 from functools import lru_cache
 
 from agent_customer_support.config import get_settings
+from agent_customer_support.llm import usage
 from agent_customer_support.llm.providers.anthropic_provider import (
     anthropic_complete_with_tools,
 )
@@ -62,6 +63,10 @@ def complete_with_tools(
                 reasoning_effort=cfg.reasoning_effort,
             )
         gen.update(output=out.get("text"), usage_details=out.get("usage"))
+        # Same numbers as the Langfuse update above, made available in-process so the
+        # eval harness can price a run without a Langfuse deployment. No-op unless a
+        # caller has opened a `usage.collect()` scope.
+        usage.record(model, out.get("usage"))
         return out
 
 

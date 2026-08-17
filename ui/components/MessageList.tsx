@@ -1,7 +1,17 @@
 // ui/components/MessageList.tsx
 "use client";
 
-import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  createContext,
+  Fragment,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 
 export interface Message {
   role: "user" | "agent" | "error";
@@ -22,28 +32,167 @@ interface Props {
 }
 
 /**
- * Inline markdown within a single line: `**bold**` and `` `code` ``. Anything
- * else is passed through untouched. We tokenize with one regex so the two
- * markers can appear in any order without nesting bugs.
+ * A single image line, e.g. `![screen](https://…)`. Nothing else on the line.
+ * Used to give a screenshot its own block instead of wedging it into a paragraph.
+ */
+const IMAGE_LINE = /^\s*!\[([^\]]*)\]\(([^)]+)\)\s*$/;
+
+/**
+ * Opens the full-size viewer. A context rather than a prop because the images sit at the
+ * bottom of the markdown renderer (`Markdown` → block/`Inline` → `DocImage`), and
+ * threading a callback through those would mean touching every intermediate signature.
+ */
+const LightboxContext = createContext<(url: string) => void>(() => {});
+
+/** Wraps a thumbnail so a plain click opens the viewer instead of navigating.
+ *
+ * Kept as a real `<a href>` rather than a button: modifier- and middle-clicks then still
+ * open the image in a new tab through the browser's own handling, which is worth
+ * preserving for anyone who wants the raw file. Only an unmodified left click is
+ * intercepted.
+ */
+function ImageTrigger({
+  url,
+  title,
+  className,
+  children,
+}: {
+  url: string;
+  title: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  const open = useContext(LightboxContext);
+  const onClick = (e: MouseEvent<HTMLAnchorElement>) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+    e.preventDefault();
+    open(url);
+  };
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={onClick}
+      title={title}
+      className={className}
+    >
+      {children}
+    </a>
+  );
+}
+
+/**
+ * Full-size image viewer. Dismissed by the close button, a click on the backdrop, or
+ * Escape — all three, because a modal that traps the reader in a chat window is worse
+ * than no modal. Body scroll is locked while open so the page behind stays put.
+ */
+function Lightbox({ url, onClose }: { url: string; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Ảnh phóng to"
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 sm:p-8"
+    >
+      <button
+        type="button"
+        onClick={onClose}
+        aria-label="Đóng"
+        title="Đóng (Esc)"
+        className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-full bg-white/15 text-xl leading-none text-white transition-colors hover:bg-white/30"
+      >
+        ×
+      </button>
+      <img
+        src={url}
+        alt="Ảnh phóng to"
+        // Stop the backdrop handler: clicking the image itself should not dismiss it.
+        onClick={(e) => e.stopPropagation()}
+        className="max-h-full max-w-full rounded-lg bg-white object-contain shadow-2xl"
+      />
+    </div>
+  );
+}
+
+/**
+ * Images extracted from the source user guides, sent by the server as markdown with a
+ * presigned URL. The alt text carries the *kind*, which is the only channel that
+ * survives into rendered markdown, and it decides the treatment:
+ *
+ *  - `icon`   — a button glyph from a guide's table. Renders at glyph size inline in
+ *               the sentence, so "Nhấn [icon] để tạo hồ sơ" reads as one instruction.
+ *  - `screen` — a full screenshot. Renders as a bounded preview that opens the full
+ *               image in the lightbox, matching how user attachments behave below.
+ */
+function DocImage({ kind, url }: { kind: string; url: string }) {
+  if (kind === "icon") {
+    return (
+      <img
+        src={url}
+        alt="Biểu tượng trên phần mềm"
+        className="inline-block max-h-5 max-w-[8rem] align-text-bottom rounded-sm border border-gray-300 bg-white object-contain"
+      />
+    );
+  }
+  return (
+    <ImageTrigger
+      url={url}
+      title="Nhấn để xem ảnh đầy đủ"
+      className="group mt-1 inline-flex cursor-zoom-in flex-col gap-0.5"
+    >
+      <img
+        src={url}
+        alt="Ảnh minh hoạ từ tài liệu hướng dẫn"
+        className="max-h-40 max-w-full rounded-lg border border-gray-300 bg-white object-contain transition-colors group-hover:border-blue-400"
+      />
+      <span className="text-[0.7rem] text-gray-500 group-hover:text-blue-600 group-hover:underline">
+        Nhấn để xem ảnh đầy đủ
+      </span>
+    </ImageTrigger>
+  );
+}
+
+/**
+ * Inline markdown within a single line: `![alt](url)`, `**bold**` and `` `code` ``.
+ * Anything else is passed through untouched. We tokenize with one regex so the
+ * markers can appear in any order without nesting bugs — the image alternative
+ * comes first so `![…](…)` is never mistaken for other syntax.
  */
 function Inline({ text }: { text: string }) {
   const nodes: ReactNode[] = [];
-  const regex = /\*\*(.+?)\*\*|`([^`]+)`/g;
+  const regex = /!\[([^\]]*)\]\(([^)]+)\)|\*\*(.+?)\*\*|`([^`]+)`/g;
   let last = 0;
   let key = 0;
   let m: RegExpExecArray | null;
   while ((m = regex.exec(text)) !== null) {
     if (m.index > last) nodes.push(text.slice(last, m.index));
-    if (m[1] !== undefined) {
+    if (m[2] !== undefined) {
+      nodes.push(<DocImage key={key++} kind={m[1]} url={m[2]} />);
+    } else if (m[3] !== undefined) {
       nodes.push(
         <strong key={key++} className="font-semibold">
-          {m[1]}
+          {m[3]}
         </strong>,
       );
     } else {
       nodes.push(
         <code key={key++} className="rounded bg-black/5 px-1 py-0.5 text-[0.85em]">
-          {m[2]}
+          {m[4]}
         </code>,
       );
     }
@@ -55,12 +204,14 @@ function Inline({ text }: { text: string }) {
 
 type Block =
   | { type: "ul" | "ol"; items: string[] }
-  | { type: "p"; lines: string[] };
+  | { type: "p"; lines: string[] }
+  | { type: "img"; alt: string; url: string };
 
 /**
  * Group raw text into markdown blocks line-by-line: consecutive `- `/`* ` lines
- * become a bullet list, `1.` lines an ordered list, blank lines break
- * paragraphs, everything else accumulates into a paragraph.
+ * become a bullet list, `1.` lines an ordered list, a line holding only an image
+ * becomes its own block, blank lines break paragraphs, everything else
+ * accumulates into a paragraph.
  */
 function parseBlocks(text: string): Block[] {
   const blocks: Block[] = [];
@@ -82,9 +233,17 @@ function parseBlocks(text: string): Block[] {
 
   for (const raw of text.split("\n")) {
     const line = raw.trimEnd();
+    const img = line.match(IMAGE_LINE);
     const ul = line.match(/^\s*[-*]\s+(.*)$/);
     const ol = line.match(/^\s*\d+\.\s+(.*)$/);
-    if (ul) {
+    if (img) {
+      // A standalone screenshot gets real block margins rather than being absorbed
+      // into whatever paragraph or list happened to precede it. Checked before the
+      // list patterns because `![…](…)` alone on a line is never a list item.
+      flushPara();
+      flushList();
+      blocks.push({ type: "img", alt: img[1], url: img[2] });
+    } else if (ul) {
       flushPara();
       if (!list || list.type !== "ul") {
         flushList();
@@ -112,16 +271,54 @@ function parseBlocks(text: string): Block[] {
 }
 
 /**
+ * Assign each ordered list a `start` so numbering continues across an interruption.
+ *
+ * `parseBlocks` ends a list at any blank line, sub-list, or image, so a reply whose steps
+ * read "1. 2. 3." in markdown became three separate `<ol>`s each restarting at 1. What
+ * breaks a sequence is a *paragraph* — "**Thao tác nhận mẫu:**" genuinely starts a new
+ * list — while an illustrating screenshot or a nested bullet list belongs to the step it
+ * follows and must not reset the count.
+ *
+ * This is a numbering fix, not real nesting: sub-bullets still render as a sibling list
+ * rather than inside their `<li>`. Correcting that means teaching `parseBlocks` about
+ * indentation, which is more than the chat replies need.
+ */
+function withOrderedStarts(blocks: Block[]): (Block & { start?: number })[] {
+  let next = 1;
+  let open = false;
+  return blocks.map((b) => {
+    if (b.type === "ol") {
+      const start = open ? next : 1;
+      next = start + b.items.length;
+      open = true;
+      return { ...b, start };
+    }
+    if (b.type === "p") {
+      open = false;
+      next = 1;
+    }
+    return b;
+  });
+}
+
+/**
  * Lightweight markdown renderer covering what the chat responses use:
- * paragraphs, bullet/ordered lists, inline bold and code. Avoids a full
+ * paragraphs, bullet/ordered lists, images, inline bold and code. Avoids a full
  * markdown dependency; the container no longer needs `whitespace-pre-wrap`
  * since block structure is now explicit.
  */
 function Markdown({ text }: { text: string }) {
-  const blocks = parseBlocks(text);
+  const blocks = withOrderedStarts(parseBlocks(text));
   return (
     <div className="space-y-2">
       {blocks.map((b, i) => {
+        if (b.type === "img") {
+          return (
+            <div key={i}>
+              <DocImage kind={b.alt} url={b.url} />
+            </div>
+          );
+        }
         if (b.type === "p") {
           return (
             <p key={i}>
@@ -137,7 +334,7 @@ function Markdown({ text }: { text: string }) {
         const ListTag = b.type === "ul" ? "ul" : "ol";
         const listClass = b.type === "ul" ? "list-disc" : "list-decimal";
         return (
-          <ListTag key={i} className={`${listClass} space-y-1 pl-5`}>
+          <ListTag key={i} className={`${listClass} space-y-1 pl-5`} start={b.start}>
             {b.items.map((it, j) => (
               <li key={j}>
                 <Inline text={it} />
@@ -215,6 +412,12 @@ export default function MessageList({ messages, loading, onFeedbackDown }: Props
   const bottomRef = useRef<HTMLDivElement>(null);
   // Per-message selection, keyed by messageId. undefined = nothing picked yet.
   const [feedback, setFeedback] = useState<Record<string, FeedbackSignal | undefined>>({});
+  // URL of the image being viewed full size, or null when the viewer is closed. Held here
+  // rather than per-image so only one can ever be open.
+  const [zoomed, setZoomed] = useState<string | null>(null);
+  // Stable identity: it is the context value, so a new function each render would
+  // re-render every image in the thread.
+  const closeZoom = useCallback(() => setZoomed(null), []);
   // Id of the message whose text was just copied, so only that row shows the tick.
   const [copied, setCopied] = useState<string | null>(null);
   const copyTimer = useRef<ReturnType<typeof setTimeout>>();
@@ -249,7 +452,8 @@ export default function MessageList({ messages, loading, onFeedbackDown }: Props
   };
 
   return (
-    <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+    <LightboxContext.Provider value={setZoomed}>
+      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
       {messages.map((msg, i) => {
         if (msg.role === "user") {
           return (
@@ -262,13 +466,21 @@ export default function MessageList({ messages, loading, onFeedbackDown }: Props
                   <div className="flex flex-wrap gap-1 justify-end">
                     {msg.attachments.map((att, j) =>
                       att.url ? (
-                        <a key={j} href={att.url} target="_blank" rel="noopener noreferrer">
+                        // Same lightbox as the guide screenshots — two different
+                        // click behaviours for two kinds of image in one thread
+                        // would just read as a bug.
+                        <ImageTrigger
+                          key={j}
+                          url={att.url}
+                          title="Nhấn để xem ảnh đầy đủ"
+                          className="cursor-zoom-in"
+                        >
                           <img
                             src={att.url}
                             alt={`Ảnh đính kèm ${j + 1}`}
                             className="max-h-48 max-w-full rounded-lg border border-blue-300 object-contain"
                           />
-                        </a>
+                        </ImageTrigger>
                       ) : (
                         <span
                           key={j}
@@ -373,6 +585,8 @@ export default function MessageList({ messages, loading, onFeedbackDown }: Props
       )}
 
       <div ref={bottomRef} />
-    </div>
+      </div>
+      {zoomed && <Lightbox url={zoomed} onClose={closeZoom} />}
+    </LightboxContext.Provider>
   );
 }

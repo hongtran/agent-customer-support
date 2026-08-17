@@ -110,6 +110,48 @@ size-checked at the widget boundary (413) before any S3 or LLM spend, and both t
 and the presign in `Coordinator._finish` degrade on failure rather than raising — by that
 point the reply is already paid for, so losing a screenshot beats losing the answer.
 
+### Document images
+
+Answers can show the screenshots and button glyphs from the source user guides. The guides
+were converted from `.docx` with pandoc, so their chunks carry `![](media/image23.png)`
+refs; `doc_images.py` is the whole text transform and `stores/doc_image_store.py` the S3
+side. Images live at `<doc_images_prefix>/<application_slug>/imageNN.png`, uploaded by
+`scripts/upload_doc_images.py`.
+
+The pipeline: `rag.search` → rewrite refs to scoped markers → compose → validate/cap →
+persist reply **with markers** → `Coordinator._finish` presigns for the response only.
+
+**`media/imageNN.png` is unique only within one document** — every guide has its own
+`image1.png` — so the key must be scoped by `metadata.application`. That is why the marker
+is `[[img:<kind>:<slug>/<name>]]` and not just a filename, and why a chunk with no
+`application` (the deliberate global-document case in `_build_filter`) has its refs dropped
+rather than guessed at.
+
+**Nothing is special-cased per document.** Whether a reply shows images is decided by what
+is in the bucket at request time: `DocImageStore.names` is the whitelist, so a document
+whose media has not been uploaded answers in plain text through the same code path as one
+that has it. Uploading media is the entire integration step. A ref is *never* left
+unresolved — it is rewritten or deleted, because a leaked `media/…` ref would be copied
+through by the composer and render as a broken relative URL.
+
+**The catalog, not the regex, is the hallucination guard.** `doc_images.select` checks each
+composed marker against the same catalog the passages were rewritten against. Shape is not
+enough: a model that invents `image999.png` under a real slug writes a perfectly
+well-formed marker, and signing a URL for it would render a broken image. `select` also
+dedupes and caps at `max_reply_images`, preferring `screen` over `icon`.
+
+**The persisted turn keeps markers; only the response carries URLs.** A presigned URL
+expires, so storing one would archive a dead link and feed ~500 characters of signature
+into the transcript the LLM re-reads next turn — the same reasoning behind
+`StoredAttachment` vs `AttachmentRef`. Resolution runs after the output guardrail, so the
+guardrail judges prose. `kind` rides in the markdown alt text (`![screen](url)`) because
+that is the only channel surviving into rendered markdown; the widget uses it to pick an
+inline glyph vs a clickable preview thumbnail.
+
+`kind` is derived from the ref's position in the source markdown — alone on a line means a
+screenshot, sharing a line (a table cell) means a button glyph. That costs nothing, where
+an object-size check would cost an S3 HEAD per image on the request path.
+
 ### Flows
 
 `models.py` defines `Flow → FlowStep → FlowTransition → FlowOutcome`. `FlowEngine` (`flows/engine.py`) is a pure stateless resolver — `FlowAgent` uses it to advance `session.current_step_id`. Flow JSON files are seeded from `seeds/flows/` via `scripts/import_flows.py`.

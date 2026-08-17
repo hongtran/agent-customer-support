@@ -154,7 +154,7 @@ class RagClient:
                 kept: list[tuple[Any, float]] = []
                 for p, s in above:
                     m = _meta(p)
-                    sid = m.get("source_doc_id") or m.get("doc_id", "")
+                    sid = m.get("doc_id", "")
                     if counts[sid] < per_doc:
                         counts[sid] += 1
                         kept.append((p, s))
@@ -165,9 +165,9 @@ class RagClient:
             confs = [m["confidence"] for m in metas]
             citations = sorted(
                 {
-                    m.get("source_doc_id") or m.get("doc_id", "")
+                    m.get("doc_id", "")
                     for m in metas
-                    if (m.get("source_doc_id") or m.get("doc_id"))
+                    if m.get("doc_id")
                 }
             )
             top_conf = max(confs) if confs else 0.0
