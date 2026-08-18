@@ -1,3 +1,6 @@
+from pydantic import BaseModel
+
+
 def anthropic_complete_with_tools(
     *,
     client,
@@ -6,6 +9,7 @@ def anthropic_complete_with_tools(
     tools: list[dict],
     system: str | list[dict] | None,
     max_tokens: int = 1500,
+    schema: type[BaseModel] | None = None,
 ) -> dict:
     kwargs: dict = {
         "model": model,
@@ -17,7 +21,16 @@ def anthropic_complete_with_tools(
     if system:
         kwargs["system"] = system
 
-    resp = client.messages.create(**kwargs)
+    if schema is not None:
+        # `.parse` constrains decoding to the schema and validates the result into a
+        # model instance. ParsedMessage subclasses Message, so the block/usage
+        # extraction below is unchanged; `parsed_output` is None when the model
+        # produced no valid instance.
+        resp = client.messages.parse(**kwargs, output_format=schema)
+        parsed = resp.parsed_output
+    else:
+        resp = client.messages.create(**kwargs)
+        parsed = None
 
     text_parts: list[str] = []
     tool_calls: list[dict] = []
@@ -36,4 +49,5 @@ def anthropic_complete_with_tools(
         "text": "".join(text_parts) or None,
         "tool_calls": tool_calls,
         "usage": usage_details,
+        "parsed": parsed,
     }

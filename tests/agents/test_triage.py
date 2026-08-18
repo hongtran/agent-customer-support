@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import patch, AsyncMock
 from agent_customer_support.agents.triage import TriageAgent
+from agent_customer_support.llm.schemas import TriageDecision
 from agent_customer_support.agents.context import TurnContext
 from agent_customer_support.models import CustomerProfile, SessionState, Conversation
 
@@ -34,7 +35,8 @@ async def test_ambiguous_message_still_routes_to_knowledge():
     """Triage no longer clarifies — a vague message routes to knowledge, which owns
     clarification now that it has the RAG (and screenshot) context to do it well."""
     with patch(
-        "agent_customer_support.agents.triage.complete_text", return_value='{"target":"knowledge"}'
+        "agent_customer_support.agents.triage.complete_structured",
+        return_value=TriageDecision(target="knowledge"),
     ):
         res = await TriageAgent().run(_ctx("phần mềm có vấn đề"))
     assert res.action == "route" and res.routed_to == "knowledge"
@@ -42,7 +44,8 @@ async def test_ambiguous_message_still_routes_to_knowledge():
 
 async def test_clear_intent_routes_knowledge():
     with patch(
-        "agent_customer_support.agents.triage.complete_text", return_value='{"target":"knowledge"}'
+        "agent_customer_support.agents.triage.complete_structured",
+        return_value=TriageDecision(target="knowledge"),
     ):
         res = await TriageAgent().run(_ctx("cách tạo phiếu yêu cầu thử nghiệm?"))
     assert res.action == "route" and res.routed_to == "knowledge"
@@ -60,11 +63,14 @@ async def test_triage_passes_full_history_on_followup():
     ]
     captured: dict = {}
 
-    def fake_complete(*, messages, system, model=None):
+    def fake_complete(*, messages, schema, system=None, model=None):
         captured["messages"] = messages
-        return '{"target":"knowledge"}'
+        captured["schema"] = schema
+        return TriageDecision(target="knowledge")
 
-    with patch("agent_customer_support.agents.triage.complete_text", side_effect=fake_complete):
+    with patch(
+        "agent_customer_support.agents.triage.complete_structured", side_effect=fake_complete
+    ):
         await TriageAgent().run(ctx)
 
     # should have 3 messages: 2 prior turns + current
@@ -72,3 +78,21 @@ async def test_triage_passes_full_history_on_followup():
     assert captured["messages"][0]["role"] == "user"
     assert captured["messages"][1]["role"] == "assistant"
     assert captured["messages"][2]["content"] == "màn hình trắng"
+    assert captured["schema"] is TriageDecision
+
+
+async def test_no_decision_falls_back_to_knowledge():
+    """complete_structured returns None on an API error, refusal or truncation.
+    Knowledge is the fail-safe: cheapest route, and the most reversible."""
+    with patch("agent_customer_support.agents.triage.complete_structured", return_value=None):
+        res = await TriageAgent().run(_ctx("phần mềm có vấn đề"))
+    assert res.action == "route" and res.routed_to == "knowledge"
+
+
+async def test_escalate_decision_is_honoured():
+    with patch(
+        "agent_customer_support.agents.triage.complete_structured",
+        return_value=TriageDecision(target="escalate"),
+    ):
+        res = await TriageAgent().run(_ctx("việc này quá phức tạp"))
+    assert res.action == "route" and res.routed_to == "escalate"

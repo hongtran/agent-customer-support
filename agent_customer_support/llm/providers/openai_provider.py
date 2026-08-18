@@ -1,5 +1,7 @@
 import json
 
+from pydantic import BaseModel
+
 # Reasoning-family models: they take `max_completion_tokens` + `reasoning_effort`
 # and reject any `temperature` other than the default.
 _REASONING_MODEL_PREFIXES = ("gpt-5", "o1", "o3", "o4")
@@ -35,6 +37,7 @@ def openai_complete_with_tools(
     system: str | list[dict] | None,
     max_tokens: int | None = None,
     reasoning_effort: str | None = None,
+    schema: type[BaseModel] | None = None,
 ) -> dict:
     msgs = list(messages)
     if system:
@@ -57,9 +60,20 @@ def openai_complete_with_tools(
     if tools:
         kwargs["tools"] = to_openai_tools(tools)
 
-    resp = client.chat.completions.create(**kwargs)
+    if schema is not None:
+        # `.parse` is `.create` plus schema-constrained decoding and Pydantic
+        # validation of the result. The SDK derives the strict JSON schema from the
+        # model class itself, so we never hand-build one.
+        kwargs["response_format"] = schema
+        resp = client.chat.completions.parse(**kwargs)
+    else:
+        resp = client.chat.completions.create(**kwargs)
     choice = resp.choices[0]
     msg = choice.message
+
+    # None whenever the model produced no valid instance -- including a refusal,
+    # which is a real failure for the caller's fallback to handle, not a parse bug.
+    parsed = None if getattr(msg, "refusal", None) else getattr(msg, "parsed", None)
 
     tool_calls: list[dict] = []
     for tc in msg.tool_calls or []:
@@ -83,4 +97,5 @@ def openai_complete_with_tools(
         "text": msg.content,
         "tool_calls": tool_calls,
         "usage": usage_details,
+        "parsed": parsed,
     }

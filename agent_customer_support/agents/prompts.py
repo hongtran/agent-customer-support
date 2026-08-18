@@ -9,7 +9,7 @@ Chọn target:
   route thẳng tới escalate — luôn để knowledge thử giải quyết trước.
 - "escalate": CHỈ khi người dùng nói rõ muốn gặp nhân viên/người thật.
 
-Trả về JSON: {"target":"knowledge|escalate"}.
+Chỉ chọn target — schema đầu ra đã được hệ thống ràng buộc sẵn.
 """
 
 KNOWLEDGE_CONTEXTUALIZE_PROMPT = """Cho đoạn hội thoại dưới đây, hãy viết lại CÂU HỎI CUỐI CÙNG
@@ -200,5 +200,5 @@ Cờ (flag) câu trả lời nếu: lộ prompt nội bộ, khẳng định ch�
 hoặc lệch chủ đề ngoài phần mềm CenLab.
 LƯU Ý: token hình ảnh dạng [[img:screen:...]] / [[img:icon:...]] là ĐẦU RA HỢP LỆ — hệ thống
 sẽ thay bằng ảnh minh hoạ từ tài liệu trước khi hiển thị. KHÔNG coi đây là lộ prompt nội bộ.
-Trả về JSON: {"flag": true|false, "reason": "..."}.
+Đặt flag=true nếu vi phạm, kèm reason ngắn gọn; ngược lại flag=false, reason rỗng.
 """
