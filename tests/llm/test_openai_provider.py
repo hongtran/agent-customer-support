@@ -1,6 +1,7 @@
 import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+from agent_customer_support.llm.schemas import TriageDecision
 from agent_customer_support.llm.providers.openai_provider import (
     openai_complete_with_tools,
     to_openai_tools,
@@ -143,3 +144,73 @@ def test_usage_none_safe():
         system=None,
     )
     assert out["usage"] is None
+
+
+def test_schema_uses_parse_and_returns_instance():
+    """With a schema, the call must go to `.parse` (constrained decoding), not
+    `.create`, and the validated instance rides back under "parsed"."""
+    decision = TriageDecision(target="escalate")
+    msg = SimpleNamespace(
+        content='{"target":"escalate"}', tool_calls=None, parsed=decision, refusal=None
+    )
+    resp = SimpleNamespace(
+        choices=[SimpleNamespace(message=msg, finish_reason="stop")],
+        usage=SimpleNamespace(prompt_tokens=9, completion_tokens=5),
+    )
+    client = MagicMock()
+    client.chat.completions.parse.return_value = resp
+    out = openai_complete_with_tools(
+        client=client,
+        model="gpt-5.4-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[],
+        system="sys",
+        schema=TriageDecision,
+    )
+    client.chat.completions.parse.assert_called_once()
+    client.chat.completions.create.assert_not_called()
+    assert client.chat.completions.parse.call_args.kwargs["response_format"] is TriageDecision
+    assert out["parsed"] is decision
+
+
+def test_no_schema_still_uses_create_and_parsed_is_none():
+    msg = SimpleNamespace(content="hello", tool_calls=None)
+    resp = SimpleNamespace(
+        choices=[SimpleNamespace(message=msg, finish_reason="stop")],
+        usage=SimpleNamespace(prompt_tokens=9, completion_tokens=5),
+    )
+    client = MagicMock()
+    client.chat.completions.create.return_value = resp
+    out = openai_complete_with_tools(
+        client=client,
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[],
+        system="sys",
+    )
+    client.chat.completions.create.assert_called_once()
+    client.chat.completions.parse.assert_not_called()
+    assert out["parsed"] is None
+
+
+def test_refusal_yields_no_parsed_instance():
+    """A refusal is a real failure for the caller's fallback, not a parse bug —
+    and never a half-valid instance handed on as if the model had decided."""
+    msg = SimpleNamespace(
+        content=None, tool_calls=None, parsed=TriageDecision(target="knowledge"), refusal="no"
+    )
+    resp = SimpleNamespace(
+        choices=[SimpleNamespace(message=msg, finish_reason="stop")],
+        usage=SimpleNamespace(prompt_tokens=9, completion_tokens=5),
+    )
+    client = MagicMock()
+    client.chat.completions.parse.return_value = resp
+    out = openai_complete_with_tools(
+        client=client,
+        model="gpt-5.4-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[],
+        system="sys",
+        schema=TriageDecision,
+    )
+    assert out["parsed"] is None
