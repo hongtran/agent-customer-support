@@ -206,3 +206,20 @@ async def test_pending_verification_resumes_and_escalates_when_complete():
     c.backlog.add.assert_awaited_once()
     saved = c.sessions.save.call_args.args[0]
     assert saved.pending is None
+
+
+async def test_out_of_scope_route_refuses_before_knowledge():
+    """Triage flags off-topic: canonical refusal, no RAG/knowledge spend, no escalation."""
+    from agent_customer_support.agents.prompts import OUT_OF_SCOPE_REPLY
+
+    c = _coord()
+    c.triage.run = AsyncMock(return_value=AgentResult(action="route", routed_to="out_of_scope"))
+    c.knowledge.run = AsyncMock()
+    c.escalation.run = AsyncMock()
+    res = await c.handle_turn(
+        customer_id="c1", conversation_id="cv1", message="Tỷ giá USD hôm nay?", attachments=[]
+    )
+    assert res.reply == OUT_OF_SCOPE_REPLY
+    assert res.escalated is False
+    c.knowledge.run.assert_not_called()
+    c.escalation.run.assert_not_called()

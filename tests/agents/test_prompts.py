@@ -33,6 +33,17 @@ def test_compose_has_no_answer_and_bug_markers():
     assert "suspected_bug" in KNOWLEDGE_COMPOSE_PROMPT
 
 
+def test_compose_has_no_out_of_scope_marker():
+    # Scope validation lives in triage only, by design — KnowledgeAgent's marker
+    # set stays small. If someone re-adds [[out_of_scope]] here, parse_markers
+    # would silently leave it in user-facing replies.
+    assert "[[out_of_scope]]" not in KNOWLEDGE_COMPOSE_PROMPT
+
+
+def test_triage_prompt_offers_out_of_scope():
+    assert "out_of_scope" in TRIAGE_PROMPT
+
+
 def test_compose_forbids_exposing_internal_refs():
     # Step codes and passage indices must not leak to the user.
     assert "KHÔNG lộ tham chiếu nội bộ" in KNOWLEDGE_COMPOSE_PROMPT

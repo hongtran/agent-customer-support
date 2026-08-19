@@ -36,8 +36,11 @@ This is a **Vietnamese-language customer support agent** for CenLab cloud softwa
 `POST /widget/chat` → `Coordinator.handle_turn()` → agents in sequence → `ChatResponse`
 
 The `Coordinator` (`agents/coordinator.py`) orchestrates:
-1. **Input guardrail** — blocks off-topic/harmful input
-2. **Triage** — routes to `flow`, `escalate`, or `knowledge`
+1. **Input guardrail** — cheap non-LLM checks (empty/oversized input) only
+2. **Triage** — routes to `flow`, `escalate`, `knowledge`, or `out_of_scope` (clearly
+   non-CenLab questions get the canonical refusal before any RAG/compose spend;
+   this is the only scope gate — `KnowledgeAgent` deliberately carries no scope
+   logic, so anything triage lets through gets a normal answer attempt)
 3. **Knowledge** — RAG search + LLM answer; may detect a suspected bug
 4. **Verification** — multi-turn evidence collection when a bug is suspected (state preserved in `session.pending = "verify_issue"`)
 5. **Flow** — walks the user through a step/transition/outcome tree (e.g. account recovery)

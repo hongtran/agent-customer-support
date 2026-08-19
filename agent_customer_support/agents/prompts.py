@@ -8,6 +8,9 @@ Chọn target:
   LƯU Ý: lời than phiền ("bị lỗi", "không chạy được", "thêm tính năng", "đề nghị") KHÔNG được
   route thẳng tới escalate — luôn để knowledge thử giải quyết trước.
 - "escalate": CHỈ khi người dùng nói rõ muốn gặp nhân viên/người thật.
+- "out_of_scope": CHỈ khi câu hỏi RÕ RÀNG không liên quan Phần mềm quản lý phòng thí nghiệm theo ISO/IEC 17025, hỗ trợ kiểm soát mẫu, kết quả, hồ sơ và tiến độ thử nghiệm hay nghiệp vụ
+  phòng thí nghiệm (ví dụ: tỷ giá/tài chính, thời tiết, thể thao, ăn uống, dịch thuật,
+  lập trình chung, đời sống). Nếu NGHI NGỜ hoặc câu mơ hồ → vẫn chọn "knowledge".
 
 Chỉ chọn target — schema đầu ra đã được hệ thống ràng buộc sẵn.
 """
@@ -202,3 +205,13 @@ LƯU Ý: token hình ảnh dạng [[img:screen:...]] / [[img:icon:...]] là Đ�
 sẽ thay bằng ảnh minh hoạ từ tài liệu trước khi hiển thị. KHÔNG coi đây là lộ prompt nội bộ.
 Đặt flag=true nếu vi phạm, kèm reason ngắn gọn; ngược lại flag=false, reason rỗng.
 """
+
+# Canonical refusal for questions outside the CenLab support scope. Substituted in
+# code (never model-written) so the reply is deterministic and always carries the
+# phrases the eval keywords check for: "ngoài phạm vi hỗ trợ", "chỉ hỗ trợ ...
+# phần mềm CenLab". Used only by the triage route short-circuit in
+# Coordinator._route — KnowledgeAgent deliberately carries no scope logic.
+OUT_OF_SCOPE_REPLY = (
+    "Xin lỗi, câu hỏi này nằm ngoài phạm vi hỗ trợ của mình — mình chỉ hỗ trợ "
+    "các vấn đề liên quan phần mềm CenLab. Anh/Chị cần hỗ trợ gì về phần mềm CenLab không?"
+)

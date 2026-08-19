@@ -96,3 +96,12 @@ async def test_escalate_decision_is_honoured():
     ):
         res = await TriageAgent().run(_ctx("việc này quá phức tạp"))
     assert res.action == "route" and res.routed_to == "escalate"
+
+
+async def test_off_topic_routes_out_of_scope():
+    with patch(
+        "agent_customer_support.agents.triage.complete_structured",
+        return_value=TriageDecision(target="out_of_scope"),
+    ):
+        res = await TriageAgent().run(_ctx("Gợi ý giúp tôi vài quán ăn trưa ngon gần văn phòng."))
+    assert res.action == "route" and res.routed_to == "out_of_scope"

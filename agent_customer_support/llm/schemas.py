@@ -23,10 +23,13 @@ class TriageDecision(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    target: Literal["knowledge", "escalate"] = Field(
+    target: Literal["knowledge", "escalate", "out_of_scope"] = Field(
         description=(
             "knowledge for any product question, how-to, bug report or feature "
-            "request; escalate only when the user explicitly asks for a human."
+            "request; escalate only when the user explicitly asks for a human; "
+            "out_of_scope only when the question is clearly unrelated to the "
+            "CenLab software (finance, weather, sports, food, translation, "
+            "general programming...) — when in doubt, pick knowledge."
         )
     )
 

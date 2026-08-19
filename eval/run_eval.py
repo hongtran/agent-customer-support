@@ -16,10 +16,10 @@ Scoring rules worth knowing before reading the numbers:
     adversarial rows have no correct passage to retrieve -- their keywords are
     phrases like "không có thông tin" -- so including them would depress MRR for
     behaving correctly.
-  * The 3 off-topic rows expect the input guardrail to block them. This runner
-    exercises KnowledgeAgent directly and does not run the guardrail, so those
-    rows measure the second line of defence: what the RAG layer does if an
-    off-topic question reaches it.
+  * The 6 off-topic rows expect the triage out_of_scope route to block them.
+    This runner exercises KnowledgeAgent directly and does not run triage, and
+    KnowledgeAgent deliberately carries no scope logic — so those rows will show
+    answered/clarify here; only the full Coordinator path refuses them.
   * Cost and latency cover *all* rows that ran, adversarial ones included -- a
     refusal costs money too. Agent spend and judge spend are reported separately:
     the judge is pinned and runs on every row whatever model is under test, so

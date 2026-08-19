@@ -154,7 +154,7 @@ class RagClient:
                 kept: list[tuple[Any, float]] = []
                 for p, s in above:
                     m = _meta(p)
-                    sid = m.get("doc_id", "")
+                    sid = m.get("doc_id") or m.get("source_doc_id", "")
                     if counts[sid] < per_doc:
                         counts[sid] += 1
                         kept.append((p, s))
@@ -163,11 +163,13 @@ class RagClient:
             passages = [_text(p) for p, _ in ranked]
             metas = [{**_meta(p), "confidence": round(float(s), 4)} for p, s in ranked]
             confs = [m["confidence"] for m in metas]
+            # The product corpus (enterprise-llm-service) writes `doc_id`; the in-repo
+            # QA indexer writes `source_doc_id`. Read both so QA hits keep citations.
             citations = sorted(
                 {
-                    m.get("doc_id", "")
+                    m.get("doc_id") or m.get("source_doc_id", "")
                     for m in metas
-                    if m.get("doc_id")
+                    if m.get("doc_id") or m.get("source_doc_id")
                 }
             )
             top_conf = max(confs) if confs else 0.0
@@ -199,4 +201,3 @@ class RagClient:
                 }
             )
             return result
-

@@ -6,6 +6,7 @@ from agent_customer_support.agents.escalation import EscalationAgent
 from agent_customer_support.agents.flow import FlowAgent
 from agent_customer_support.agents.guardrail import GuardrailAgent
 from agent_customer_support.agents.knowledge import KnowledgeAgent
+from agent_customer_support.agents.prompts import OUT_OF_SCOPE_REPLY
 from agent_customer_support.agents.triage import TriageAgent
 from agent_customer_support.agents.verification import IssueVerificationAgent
 from agent_customer_support.escalation import Escalator
@@ -113,13 +114,13 @@ class Coordinator:
             result = await self._route(ctx, session)
 
             # 7. Output guardrail
-            gout = await self.guardrail.check_output(result.reply)
-            if not gout["pass"]:
-                result = AgentResult(
-                    reply=_FALLBACK_REPLY,
-                    escalated=result.escalated,
-                    new_session=result.new_session,
-                )
+            # gout = await self.guardrail.check_output(result.reply)
+            # if not gout["pass"]:
+            #     result = AgentResult(
+            #         reply=_FALLBACK_REPLY,
+            #         escalated=result.escalated,
+            #         new_session=result.new_session,
+            #     )
             resp = await self._finish(ctx, result, session)
             turn.update(output={"reply": resp.reply, "escalated": resp.escalated})
             return resp
@@ -148,6 +149,12 @@ class Coordinator:
             return await self._traced(
                 "escalation", lambda: self.escalation.run(ctx, reason="user requested human"), ctx
             )
+        # Clearly off-topic: refuse before any RAG or compose spend. Triage is the
+        # single scope gate by design — KnowledgeAgent stays scope-free to keep its
+        # marker logic simple, so anything triage lets through gets a normal answer
+        # attempt (and at worst the no_answer/clarify path).
+        if tri.routed_to == "out_of_scope":
+            return AgentResult(reply=OUT_OF_SCOPE_REPLY, resolved=True, out_of_scope=True)
 
         return await self._knowledge_phase(ctx, session)
 

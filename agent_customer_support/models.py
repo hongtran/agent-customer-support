@@ -219,8 +219,12 @@ class ChatResponse(BaseModel):
 class AgentResult(BaseModel):
     action: Literal["reply", "route"] = "reply"
     reply: str = ""
-    routed_to: Literal["knowledge", "flow", "escalate"] | None = None
+    routed_to: Literal["knowledge", "flow", "escalate", "out_of_scope"] | None = None
     resolved: bool | None = None
+    # True when the turn was refused as unrelated to CenLab. Distinct from a plain
+    # resolved=False miss on purpose: a miss escalates to Zalo and writes backlog/QA
+    # records, which off-topic chatter must never do.
+    out_of_scope: bool = False
     suspected_bug: bool = False
     evidence_complete: bool = False
     evidence: dict | None = None
