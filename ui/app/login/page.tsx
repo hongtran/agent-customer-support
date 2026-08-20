@@ -1,8 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { login } from "@/lib/api";
+import loginBg from "@/public/login-bg.jpg";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -27,10 +29,32 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex h-screen items-center justify-center bg-gray-50">
+    // The navy matches the artwork's darkest tone, so the page paints the right
+    // colour immediately instead of flashing the white body underneath.
+    <div className="relative flex h-screen items-center justify-center overflow-hidden bg-[#04122b] px-4">
+      {/* Decorative, so alt="" keeps it out of the accessibility tree. The static
+          import hands next/image the real dimensions and a blur placeholder, and
+          `priority` marks it as this page's LCP element. next/image also resizes
+          and re-encodes the 3344px source per viewport, which is what keeps a
+          706 KB JPEG from being downloaded in full on a phone.
+
+          object-left below `sm`: the art is 16:9 with its subject bottom-left, so a
+          phone crops it to a tall slice. Centring that slice lands on the empty middle
+          and the background reads as flat navy; anchoring left keeps the glassware in
+          frame. From `sm` up the viewport is wide enough to centre the whole scene. */}
+      <Image
+        src={loginBg}
+        alt=""
+        fill
+        priority
+        placeholder="blur"
+        sizes="100vw"
+        className="object-cover object-left sm:object-center"
+      />
+
       <form
         onSubmit={onSubmit}
-        className="w-80 rounded-lg border border-gray-200 bg-white p-6 shadow-sm"
+        className="relative w-80 rounded-lg border border-gray-200 bg-white p-6 shadow-2xl"
       >
         <h1 className="mb-1 text-lg font-semibold text-gray-800">Đăng nhập</h1>
         <p className="mb-5 text-xs text-gray-500">Hỗ trợ phần mềm CenLab</p>
