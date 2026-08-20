@@ -22,6 +22,7 @@ from agent_customer_support.llm.normalize import (
     to_openai_content,
 )
 from agent_customer_support.models import AgentResult, QARecord
+from agent_customer_support.observability import tracing
 
 logger = logging.getLogger(__name__)
 
@@ -125,11 +126,15 @@ class KnowledgeAgent:
             content = ctx.transcript
             system = KNOWLEDGE_CONTEXTUALIZE_PROMPT
 
-        raw = complete_text(
-            messages=[{"role": "user", "content": content}],
-            system=system,
-            model=model,
-        )
+        # Labelled so this query-rewrite lands as `llm.knowledge.contextualize`,
+        # separate from the compose call in `_compose` (`llm.knowledge`) -- it runs on
+        # a different model and must not be judged as if it were an answer.
+        with tracing.step("contextualize"):
+            raw = complete_text(
+                messages=[{"role": "user", "content": content}],
+                system=system,
+                model=model,
+            )
         return (raw or ctx.message).strip()
 
     async def _compose(

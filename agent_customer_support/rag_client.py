@@ -139,6 +139,7 @@ class RagClient:
         """
         with tracing.span(
             "rag.search",
+            as_type="retriever",
             input={
                 "query": query,
                 "collection": collection,

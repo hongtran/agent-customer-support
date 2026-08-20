@@ -57,8 +57,12 @@ class Coordinator:
         self.escalation = EscalationAgent()
 
     async def _traced(self, name: str, run_coro, ctx: TurnContext) -> AgentResult:
-        """Run a sub-agent inside a child span (no-op when tracing is off)."""
-        with tracing.span(f"agent.{name}", input={"message": ctx.message}) as sp:
+        """Run a sub-agent inside a child span (no-op when tracing is off).
+
+        `agent_span` also labels every LLM generation made inside with this agent's
+        name, which is what makes a Langfuse evaluator targetable at one agent.
+        """
+        with tracing.agent_span(name, input={"message": ctx.message}) as sp:
             res = await run_coro()
             sp.update(output=res.model_dump(mode="json"))
             return res

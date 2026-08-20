@@ -36,7 +36,7 @@ The `Coordinator` (`agent_customer_support/agents/coordinator.py`) orchestrates:
 
 ### Observability
 
-All tracing goes through `observability/tracing.py` (the only file that imports `langfuse`). It's a no-op when `LANGFUSE_PUBLIC_KEY` is unset. Spans follow the hierarchy: `turn` → `agent.<name>` → `llm` / `tool.<name>` / `rag.search`.
+All tracing goes through `observability/tracing.py` (the only file that imports `langfuse`). It's a no-op when `LANGFUSE_PUBLIC_KEY` is unset. Spans follow the hierarchy: `turn` (chain) → `agent.<name>` (agent) → `llm.<agent>[.<step>]` (generation) / `tool.<name>` (tool) / `rag.search` (retriever). The parenthesised names are Langfuse **observation types**, which the UI filters and renders separately. A generation is named after the agent that made it and carries `metadata.agent` (plus `metadata.step` for a second call inside one agent, e.g. `llm.knowledge.contextualize`) — that is the handle for pointing a Langfuse evaluator at one agent's calls. The agent name reaches the LLM facade through a ContextVar set by `tracing.agent_span`, so no agent signature carries it.
 
 ## Getting started
 

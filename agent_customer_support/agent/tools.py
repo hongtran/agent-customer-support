@@ -110,7 +110,7 @@ async def _dispatch(name: str, args: dict, ctx: ToolContext) -> dict:
 
 
 async def dispatch(name: str, args: dict, ctx: ToolContext) -> dict:
-    with tracing.span(f"tool.{name}", input=args) as sp:
+    with tracing.span(f"tool.{name}", as_type="tool", input=args) as sp:
         result = await _dispatch(name, args, ctx)
         sp.update(output=result)
         return result

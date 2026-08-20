@@ -71,8 +71,9 @@ async def test_dispatch_wraps_in_span(monkeypatch):
     calls: dict = {}
 
     @contextmanager
-    def fake_span(name, *, input=None, metadata=None):
+    def fake_span(name, *, as_type="span", input=None, metadata=None):
         calls["name"] = name
+        calls["as_type"] = as_type
         yield handle
 
     monkeypatch.setattr(tools_mod.tracing, "span", fake_span)

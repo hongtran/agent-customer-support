@@ -226,8 +226,9 @@ async def test_search_invokes_tracing_span(monkeypatch):
     calls: dict = {}
 
     @contextmanager
-    def fake_span(name, *, input=None, metadata=None):
+    def fake_span(name, *, as_type="span", input=None, metadata=None):
         calls["name"] = name
+        calls["as_type"] = as_type
         yield handle
 
     monkeypatch.setattr(rag_client_mod.tracing, "span", fake_span)

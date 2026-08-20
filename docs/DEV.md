@@ -105,12 +105,22 @@ poetry run python eval/run_eval.py eval/golden.json
 
 ## Observability (Langfuse)
 
-The agent emits a hierarchical trace per turn — root span (one conversation turn)
-→ per-agent spans (`agent.triage`, `agent.knowledge`, `agent.flow`,
-`agent.verification`, `agent.escalation`) → LLM generations (`llm`, with model +
-token usage), tool spans (`tool.<name>`), and `rag.search`. Traces are grouped by
+The agent emits a hierarchical trace per turn — root `turn` (type `chain`, one
+conversation turn) → per-agent spans (type `agent`: `agent.triage`,
+`agent.knowledge`, `agent.flow`, `agent.verification`, `agent.escalation`) → LLM
+generations (`llm.<agent>`, with model + token usage), tool spans (type `tool`,
+`tool.<name>`), and `rag.search` (type `retriever`). Traces are grouped by
 `session_id = conversation_id`, so a whole multi-turn conversation (including a
 `verify_issue` flow that resumes across turns) shows as one timeline.
+
+**Every LLM generation names the agent that made it.** `tracing.agent_span` sets a
+ContextVar that `tracing.generation` reads, so the call becomes `llm.knowledge`
+rather than a bare `llm` and carries `metadata.agent`. That is what makes an
+evaluator targetable at one agent: filter Langfuse on the observation name
+`llm.knowledge`, or on `metadata.agent`. A second LLM call inside one agent adds a
+step (`tracing.step`) — the knowledge query-rewrite is `llm.knowledge.contextualize`,
+so it is not judged as if it were an answer. Note Langfuse `tags` are a *trace*-level
+field and cannot separate observations; the type + name + metadata do that job.
 
 **Enable it:** set three env vars (otherwise tracing is a complete no-op):
 
