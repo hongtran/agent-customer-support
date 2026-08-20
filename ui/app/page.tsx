@@ -8,10 +8,31 @@ import InputBar from "@/components/InputBar";
 import { sendMessage, sendFeedback, Attachment, UnauthorizedError } from "@/lib/api";
 import { logout, useSession } from "@/lib/useSession";
 
+/**
+ * A conversation id for a brand-new thread.
+ *
+ * `crypto.randomUUID` only exists in a secure context (https, or localhost), so a
+ * demo served over plain http on a LAN address would not have it. That used to
+ * break one button; now it would break the first render, so fall back rather than
+ * throw. The fallback is not cryptographically strong and does not need to be —
+ * the id only has to be unique per browser tab, and the server reads the tenant
+ * from the access token, never from this string.
+ */
+function newConversationId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `conv-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export default function Home() {
   const router = useRouter();
   const session = useSession();
-  const [conversationId, setConversationId] = useState("smoke-ui");
+  // Every visit to the chat page starts its own conversation. The old hardcoded
+  // "smoke-ui" default meant every page load appended to one shared transcript, so
+  // the agent re-read a stranger's history as context. A lazy initializer, so the id
+  // is minted once per mount instead of on every render.
+  const [conversationId, setConversationId] = useState(newConversationId);
   const [selectedApplications, setSelectedApplications] = useState<string[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
@@ -21,7 +42,7 @@ export default function Home() {
   };
 
   const handleNewConversation = () => {
-    setConversationId(crypto.randomUUID());
+    setConversationId(newConversationId());
     setMessages([]);
     setSelectedApplications([]);
   };
