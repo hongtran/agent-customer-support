@@ -78,6 +78,7 @@ async def test_knowledge_clarify_roundtrip_no_escalate_then_resolves():
     c.knowledge = KnowledgeAgent()
     c.triage.run = AsyncMock(return_value=AgentResult(action="route", routed_to="knowledge"))
     c.rag.search = AsyncMock(return_value={"passages": [], "citations": []})
+    c.rag.search_with_fallback = c.rag.search  # product search entry point
 
     # A single mutable session that survives across both turns, mirroring how the
     # real SessionStore would carry pending state turn-to-turn.

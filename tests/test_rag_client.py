@@ -242,3 +242,147 @@ async def test_search_invokes_tracing_span(monkeypatch):
     assert calls["name"] == "rag.search"
     handle.update.assert_called_once()
     assert res["top_confidence"] == 1.0
+
+
+# ---- widened retry when the selected application has nothing ----
+#
+# The tests above pin the hard-filter contract: a wrong application returns nothing and
+# is never silently relaxed. search_with_fallback is the explicit, opt-in way out of
+# that, for the case where the user simply picked the wrong module in the widget.
+
+
+def _counting_client(client):
+    """Wrap query_points so a test can count Qdrant round-trips."""
+    calls = []
+    inner = client.query_points
+
+    async def counted(*args, **kwargs):
+        calls.append(kwargs.get("query_filter"))
+        return await inner(*args, **kwargs)
+
+    client.query_points = counted
+    return calls
+
+
+async def _two_module_client():
+    return await _client_with(
+        [
+            _point(1, [1.0, 0.0], source_doc_id="lab#1", application="phong_thi_nghiem"),
+            _point(2, [1.0, 0.0], source_doc_id="qt#1", application="lay_mau_quan_trac"),
+        ]
+    )
+
+
+async def test_wrong_application_falls_back_to_the_customers_other_modules():
+    """The whole point: the answer lives in a module the user did not select."""
+    client = await _two_module_client()
+    res = await RagClient(client=client).search_with_fallback(
+        "q",
+        collection=COLLECTION,
+        applications=["Đo lường - Hiệu chuẩn"],  # nothing indexed under this one
+        fallback_applications=["Đo lường - Hiệu chuẩn", "Phòng thí nghiệm"],
+    )
+    assert res["citations"] == ["lab#1"]
+    assert res["fallback_used"] is True
+    # Display names in, slugs out — the scope actually filtered on.
+    assert res["applications_used"] == ["do_luong_hieu_chuan", "phong_thi_nghiem"]
+
+
+async def test_a_scope_that_answers_is_never_widened():
+    """No retry, and no second round-trip, when the selection was right."""
+    client = await _two_module_client()
+    calls = _counting_client(client)
+    res = await RagClient(client=client).search_with_fallback(
+        "q",
+        collection=COLLECTION,
+        applications=["Phòng thí nghiệm"],
+        fallback_applications=["Phòng thí nghiệm", "Lấy mẫu - Quan trắc"],
+    )
+    assert res["citations"] == ["lab#1"]
+    assert res["fallback_used"] is False
+    assert res["applications_used"] == ["phong_thi_nghiem"]
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    "applications,fallback",
+    [
+        # Same set: the retry would repeat the query it just ran.
+        (["Đo lường - Hiệu chuẩn"], ["Đo lường - Hiệu chuẩn"]),
+        # Subset: can only reach documents the first query already covered.
+        (["Đo lường - Hiệu chuẩn", "Mua sắm"], ["Mua sắm"]),
+        # Nothing to widen to.
+        (["Đo lường - Hiệu chuẩn"], None),
+        (["Đo lường - Hiệu chuẩn"], []),
+        # Already global — no scope is wider than no scope.
+        (None, ["Phòng thí nghiệm"]),
+    ],
+)
+async def test_a_retry_that_cannot_change_the_outcome_is_skipped(applications, fallback):
+    client = await _two_module_client()
+    calls = _counting_client(client)
+    res = await RagClient(client=client).search_with_fallback(
+        "q", collection=COLLECTION, applications=applications, fallback_applications=fallback
+    )
+    assert len(calls) == 1, "spent a Qdrant round-trip that could not change the answer"
+    assert res["fallback_used"] is False
+
+
+async def test_the_query_is_embedded_once_across_both_attempts(monkeypatch):
+    """Why `search` and `search_with_fallback` share a `_query` body: re-embedding a
+    byte-identical string on the retry would be a second paid Google call."""
+    embeds = []
+
+    async def counting_embed(text):
+        embeds.append(text)
+        return [1.0, 0.0]
+
+    monkeypatch.setattr(rag_client_mod, "embed_query", counting_embed)
+    client = await _two_module_client()
+    calls = _counting_client(client)
+    res = await RagClient(client=client).search_with_fallback(
+        "q",
+        collection=COLLECTION,
+        applications=["Đo lường - Hiệu chuẩn"],
+        fallback_applications=["Đo lường - Hiệu chuẩn", "Phòng thí nghiệm"],
+    )
+    assert res["fallback_used"] is True
+    assert len(calls) == 2  # two searches...
+    assert embeds == ["q"]  # ...one embedding
+
+
+async def test_search_reports_the_scope_it_filtered_on():
+    """`applications_used` is on every result, not just the fallback path."""
+    client = await _two_module_client()
+    plain = await RagClient(client=client).search(
+        "q", collection=COLLECTION, applications=["Phòng thí nghiệm"]
+    )
+    assert plain["applications_used"] == ["phong_thi_nghiem"]
+    assert plain["fallback_used"] is False
+
+    unscoped = await RagClient(client=client).search("q", collection=COLLECTION)
+    assert unscoped["applications_used"] is None
+
+
+async def test_multi_application_scope_collapses_per_document():
+    """A single-application scope is effectively one guide, so it keeps every chunk.
+    A multi-application scope spans several guides — the situation per_doc exists for,
+    and what a widened fallback always looks like."""
+    points = [
+        _point(i, [1.0, 0.0], source_doc_id="lab#1", application="phong_thi_nghiem", text=f"c{i}")
+        for i in range(4)
+    ]
+    client = await _client_with(points)
+
+    one = await RagClient(client=client).search(
+        "q", collection=COLLECTION, applications=["Phòng thí nghiệm"], per_doc=2
+    )
+    assert len(one["passages"]) == 4  # no collapsing
+
+    many = await RagClient(client=client).search(
+        "q",
+        collection=COLLECTION,
+        applications=["Phòng thí nghiệm", "Lấy mẫu - Quan trắc"],
+        per_doc=2,
+    )
+    assert len(many["passages"]) == 2  # one guide can't crowd out the rest

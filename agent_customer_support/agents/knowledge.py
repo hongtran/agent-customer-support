@@ -9,10 +9,12 @@ from agent_customer_support.agents.prompts import (
     KNOWLEDGE_CONTEXTUALIZE_VISION_PROMPT,
     KNOWLEDGE_COMPOSE_PROMPT,
     KNOWLEDGE_COMPOSE_PROMPT_WITH_QA,
+    KNOWLEDGE_OTHER_APPLICATION_NOTE,
     KNOWLEDGE_RESUME_NO_CLARIFY,
     PROCESS_BLOCK,
 )
 from agent_customer_support import doc_images
+from agent_customer_support.applications import APPLICATION_NAMES, to_slugs
 from agent_customer_support.config import Settings, get_settings
 from agent_customer_support.llm import complete_text
 from agent_customer_support.llm.normalize import (
@@ -68,6 +70,28 @@ def _passages_block(passages: list[str]) -> str:
     return "\n\n".join(f"[{i}] {p}" for i, p in enumerate(passages))
 
 
+def _other_applications(metas: list[dict], selected: list[str] | None) -> list[str]:
+    """Display names of the applications in `metas` that fall outside `selected`.
+
+    Used only after a widened retry, to tell the user which module actually holds the
+    answer they asked for. Compares slugs (what Qdrant stores) and renders display
+    names (what the user picked in the widget) — see applications.py on why the two
+    forms must not be mixed.
+
+    A passage with no `application` is a global document (the deliberate exception in
+    `_build_filter`); it belongs to no module, so it contributes no name rather than a
+    guessed one. Order-preserving and deduped, so the note reads in retrieval order.
+    """
+    scope = set(to_slugs(selected) or [])
+    names: dict[str, None] = {}
+    for m in metas:
+        slug = m.get("application")
+        if not slug or slug in scope:
+            continue
+        names[APPLICATION_NAMES.get(slug, slug)] = None
+    return list(names)
+
+
 _HAS_PRIOR_TURN = "assistant:"
 
 
@@ -117,6 +141,8 @@ class KnowledgeAgent:
         allow_clarify: bool = True,
         qa_passages: list[str] | None = None,
         qa_leads: bool = False,
+        other_applications: list[str] | None = None,
+        selected_applications: list[str] | None = None,
     ) -> str:
         """Compose a grounded answer from the always-on process + retrieved passages.
 
@@ -143,6 +169,14 @@ class KnowledgeAgent:
             compose_prompt = KNOWLEDGE_COMPOSE_PROMPT_WITH_QA
         else:
             compose_prompt = KNOWLEDGE_COMPOSE_PROMPT
+        # Both halves or neither: the note's sentence contrasts what the user picked
+        # with where the passages actually came from, so it is meaningless without a
+        # selection to name. Guarding here also keeps the join off a None default.
+        if other_applications and selected_applications:
+            content = f"{content}\n\n" + KNOWLEDGE_OTHER_APPLICATION_NOTE.format(
+                selected_applications=", ".join(selected_applications),
+                other_applications=", ".join(other_applications),
+            )
         if not allow_clarify:
             content = f"{content}\n\n{KNOWLEDGE_RESUME_NO_CLARIFY}"
         return complete_text(
@@ -224,8 +258,15 @@ class KnowledgeAgent:
         query = await self._contextualize(ctx, cfg)
 
         applications = ctx.session.selected_applications or None
-        res = await ctx.rag.search(
-            query, collection=cfg.product_collection, applications=applications
+        # A wrong module selection is a hard filter, not a ranking penalty, so it
+        # returns nothing for a question the corpus can answer. Retry across everything
+        # this customer is entitled to — never wider than that, or we would explain a
+        # module they cannot see in their UI.
+        res = await ctx.rag.search_with_fallback(
+            query,
+            collection=cfg.product_collection,
+            applications=applications,
+            fallback_applications=ctx.customer.enabled_applications or None,
         )
         passages = res.get("passages", []) or []
         citations = res.get("citations", []) or []
@@ -240,6 +281,14 @@ class KnowledgeAgent:
         if qa_citations:
             citations = citations + [f"qa:{c}" for c in qa_citations]
 
+        # Only after a widened retry is there a mismatch worth naming; on a normal hit
+        # this stays empty and the compose prompt is byte-identical to before.
+        other_applications = (
+            _other_applications(res.get("metas", []) or [], applications)
+            if res.get("fallback_used")
+            else []
+        )
+
         # Always compose: the process context is always in the system prefix, so even
         # with no retrieved passages the model can answer process-level questions.
         # The [[no_answer]] marker is the single miss signal — emitted only when
@@ -252,6 +301,8 @@ class KnowledgeAgent:
             allow_clarify=not already_clarified,
             qa_passages=qa_passages,
             qa_leads=qa_leads,
+            other_applications=other_applications,
+            selected_applications=ctx.session.selected_applications,
         )
         clean, kind, application = parse_markers(composed)
         # Enforce the image contract on whatever the composer produced: only markers this

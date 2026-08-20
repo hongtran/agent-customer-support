@@ -57,9 +57,28 @@ The OpenAI provider builds request params per model family (`llm/providers/opena
 
 ### RAG
 
-`rag_client.py` reads Qdrant directly (no HTTP service in front of it). `_normalize_collection` maps the logical collection name from `Settings` to the physical `_v3` collection, mirroring enterprise-llm-service's `RagManager`. Embeddings go through `rag/embeddings.py` (Google `gemini-embedding-001`).
+`rag_client.py` reads Qdrant directly (no HTTP service in front of it). `_normalize_collection` maps the logical collection name from `Settings` to the physical `_v3` collection, mirroring enterprise-llm-service's `RagManager`. Per-document collapsing (`per_doc`) is skipped only for a **single**-application scope — one guide, where capping chunks per document would leave a single passage; a multi-application scope (always the shape of a widened retry) collapses so one guide can't crowd out the rest. Embeddings go through `rag/embeddings.py` (Google `gemini-embedding-001`).
 
-Application scoping is a **hard, server-side Qdrant payload filter** (`_build_filter`) applied during the vector search, not a post-filter — so a rare application can't be squeezed out of the candidate set, and a scoped query never answers from another application's docs. One deliberate exception: a document with no `application` in its metadata (missing or `null`) is treated as **global** and stays visible to every customer, which is what keeps untagged Q&A records (`QARecord.application` is optional) reachable. Scoping is driven by `session.selected_applications`, not `CustomerProfile.enabled_applications`.
+Application scoping is a **hard, server-side Qdrant payload filter** (`_build_filter`) applied during the vector search, not a post-filter — so a rare application can't be squeezed out of the candidate set, and a scoped query never answers from another application's docs. One deliberate exception: a document with no `application` in its metadata (missing or `null`) is treated as **global** and stays visible to every customer, which is what keeps untagged Q&A records (`QARecord.application` is optional) reachable. Scoping is driven by `session.selected_applications`, with
+`CustomerProfile.enabled_applications` as the ceiling (below).
+
+**A scope that returns nothing is retried once, wider.** Because the filter is hard, a
+user who picks the wrong module in the widget gets zero passages for a question the
+corpus can answer one module over — and the composer then emits `[[no_answer]]`, so the
+turn ends in a clarify-then-handoff instead of an answer. `RagClient.search_with_fallback`
+retries that miss against a caller-supplied wider scope; `KnowledgeAgent` supplies
+`CustomerProfile.enabled_applications`, **never** an unscoped search, so a customer is
+never told about a module they did not buy. The trigger is zero passages, not a low
+`top_confidence` — `score_threshold` has already applied, so an empty list is the only
+unambiguous "this scope has nothing" signal, and passages that came back but don't
+answer stay the composer's call as everywhere else. The retry is skipped whenever it
+could not change the outcome (`_is_wider`), and the query is embedded **once** for both
+attempts — hence the `_query` / `search` split, since a re-embed would be a second paid
+call for a byte-identical string. The result carries `fallback_used` and
+`applications_used`; on a widened hit `KnowledgeAgent` passes the foreign module's
+display name into the compose prompt (`KNOWLEDGE_OTHER_APPLICATION_NOTE`, appended to
+the **user** content so the `cache_control`'d system prefix is not invalidated) so the
+reply tells the user which module the feature actually lives in.
 
 **Application identifiers have two forms and the boundary matters.** Qdrant stores a **slug** (`lay_mau_quan_trac`); the rest of the stack uses **display names** (`Lấy mẫu - Quan trắc`) — `CustomerProfile.enabled_applications` holds names, `/widget/customers/{id}/applications` serves names, and the widget sends names back in `ChatRequest.applications`. `RagClient.search` translates via `applications.to_slugs` before it filters; filtering on a raw display name matches **nothing**. `applications.py` carries the canonical map, duplicated from enterprise-llm-service's `_APPLICATION_SLUGS` (`data_processing/extract_info_user_guide.py`) — keep them in sync. Note `seeds/flows` uses a third, kebab-case form; `to_slug` tolerates it. The `rag.search` span logs both `applications` and `applications_resolved` so a scoping miss is diagnosable from the trace.
 

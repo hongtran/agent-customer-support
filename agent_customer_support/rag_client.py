@@ -82,6 +82,20 @@ def _build_filter(doc_type: str | None, applications: list[str] | None) -> model
     return models.Filter(must=must) if must else None
 
 
+def _is_wider(primary: list[str] | None, fallback: list[str] | None) -> bool:
+    """True when re-running a search on `fallback` could surface anything new.
+
+    Both arguments must already be slug-normalised. An empty `primary` is already a
+    global search, so nothing is wider than it; an empty `fallback` scopes to nothing;
+    and a `fallback` that is a subset of `primary` can only return documents the first
+    query already had access to. In all three cases the retry is a Qdrant round-trip
+    that cannot change the answer.
+    """
+    if not primary or not fallback:
+        return False
+    return not set(fallback) <= set(primary)
+
+
 class RagClient:
     def __init__(self, client: AsyncQdrantClient | None = None) -> None:
         cfg = get_settings()
@@ -89,50 +103,60 @@ class RagClient:
             url=cfg.qdrant_endpoint, api_key=cfg.qdrant_api_key
         )
 
-    async def search(
+    async def _query(
         self,
         query: str,
+        vec: list[float],
+        *,
         collection: str,
-        top_k: int = 8,
-        score_threshold: float = 0.6,
-        doc_type: str | None = None,
-        applications: list[str] | None = None,
-        per_doc: int | None = 2,
+        applications: list[str] | None,
+        top_k: int,
+        score_threshold: float,
+        doc_type: str | None,
+        per_doc: int | None,
+        fallback: bool = False,
     ) -> dict:
-        # `per_doc` controls how chunks are collapsed by source document, and only
-        # takes effect on a GLOBAL search (no `applications` scope):
-        #   - per_doc=N  -> keep at most N chunks per source_doc_id, then take top_k.
-        #                   This is the product-collection default: it stops one guide
-        #                   from crowding out every other document.
-        #   - per_doc=None -> no collapsing; take the top_k chunks as ranked. The QA
-        #                   collection passes this because it is always global and each
-        #                   record is its own short document.
-        # A specific-application search always skips collapsing regardless of per_doc:
-        # that scope is effectively a single guide, so one chunk per document would
-        # leave the agent with a single passage.
-        resolved_collection = _normalize_collection(collection)
-        # Callers pass display names (the widget forwards whatever the UI showed);
-        # Qdrant stores slugs. Translate once here, before anything uses the value,
-        # so every retrieval path is scoped on values that can actually match.
-        resolved_applications = to_slugs(applications)
+        """One Qdrant round-trip for an already-embedded query.
+
+        `collection` must already be `_normalize_collection`-d and `applications`
+        already `to_slugs`-normalised. This is the shared body of `search` and
+        `search_with_fallback`, and the latter reuses a single embedding across two
+        calls, so neither resolution nor the embedding itself can live in here.
+        `query` is carried only for the trace — the search runs on `vec`.
+
+        `per_doc` controls how chunks are collapsed by source document:
+          - per_doc=N  -> keep at most N chunks per source_doc_id, then take top_k.
+                          This is the product-collection default: it stops one guide
+                          from crowding out every other document.
+          - per_doc=None -> no collapsing; take the top_k chunks as ranked. The QA
+                          collection passes this because it is always global and each
+                          record is its own short document.
+        A search scoped to exactly ONE application also skips collapsing: that scope is
+        effectively a single guide, so one chunk per document would leave the agent with
+        a single passage. A MULTI-application scope does collapse — it spans several
+        guides, which is the situation per_doc exists for, and a wrong-application
+        fallback across every entitled module is exactly that case.
+        """
         with tracing.span(
             "rag.search",
             input={
                 "query": query,
-                "collection": resolved_collection,
-                "applications": resolved_applications or [],
+                "collection": collection,
+                "applications": applications or [],
+                # Distinguishes the two queries of a search_with_fallback in the trace:
+                # without it a widened retry looks like an unrelated second search.
+                "fallback": fallback,
             },
         ) as sp:
-            vec = await embed_query(query)
             resp = await self._client.query_points(
-                collection_name=resolved_collection,
+                collection_name=collection,
                 query=vec,
-                # Over-fetch so the per-document cap (global product search) still has
-                # enough candidates to fill top_k after collapsing repeats of one
-                # document. Harmless for the no-cap paths — they just slice top_k.
-                # Not related to filtering — Qdrant handles that server-side.
+                # Over-fetch so the per-document cap still has enough candidates to
+                # fill top_k after collapsing repeats of one document. Harmless for the
+                # no-cap paths — they just slice top_k. Not related to filtering —
+                # Qdrant handles that server-side.
                 limit=top_k * 4,
-                query_filter=_build_filter(doc_type, resolved_applications),
+                query_filter=_build_filter(doc_type, applications),
                 with_payload=True,
             )
             points = resp.points
@@ -143,13 +167,13 @@ class RagClient:
                 reverse=True,
             )
 
-            if resolved_applications or per_doc is None:
-                # Specific-application scope, or a global search that opts out of
-                # collapsing (QA): keep the top_k chunks as ranked.
+            if (applications and len(applications) == 1) or per_doc is None:
+                # Single-application scope, or a search that opts out of collapsing
+                # (QA): keep the top_k chunks as ranked.
                 ranked = above[:top_k]
             else:
-                # Global product search: keep at most `per_doc` chunks per source
-                # document so one guide can't crowd out the rest, then take top_k.
+                # Global or multi-application search: keep at most `per_doc` chunks per
+                # source document so one guide can't crowd out the rest, then take top_k.
                 counts: dict[str, int] = defaultdict(int)
                 kept: list[tuple[Any, float]] = []
                 for p, s in above:
@@ -192,6 +216,12 @@ class RagClient:
                 # (application scope, source doc, rank) without re-implementing this
                 # search and drifting from what the agent actually sees.
                 "metas": metas,
+                # The scope these passages actually came from, as slugs. Callers that
+                # widen the scope on a miss (search_with_fallback) need to know which
+                # attempt answered — `applications_used` is the ground truth for that,
+                # not what the caller asked for.
+                "applications_used": applications,
+                "fallback_used": fallback,
             }
             sp.update(
                 output={
@@ -201,3 +231,80 @@ class RagClient:
                 }
             )
             return result
+
+    async def search(
+        self,
+        query: str,
+        collection: str,
+        top_k: int = 8,
+        score_threshold: float = 0.6,
+        doc_type: str | None = None,
+        applications: list[str] | None = None,
+        per_doc: int | None = 2,
+    ) -> dict:
+        return await self._query(
+            query,
+            await embed_query(query),
+            collection=_normalize_collection(collection),
+            # Callers pass display names (the widget forwards whatever the UI showed);
+            # Qdrant stores slugs. Translate once here, before anything uses the value,
+            # so every retrieval path is scoped on values that can actually match.
+            applications=to_slugs(applications),
+            top_k=top_k,
+            score_threshold=score_threshold,
+            doc_type=doc_type,
+            per_doc=per_doc,
+        )
+
+    async def search_with_fallback(
+        self,
+        query: str,
+        collection: str,
+        applications: list[str] | None = None,
+        fallback_applications: list[str] | None = None,
+        top_k: int = 8,
+        score_threshold: float = 0.6,
+        doc_type: str | None = None,
+        per_doc: int | None = 2,
+    ) -> dict:
+        """Scoped search, retried once on a wider scope when the scope returns nothing.
+
+        Application scope is a hard filter, so a user who picked the wrong module gets
+        an empty result for a question the corpus can answer one module over. This
+        retries that miss against `fallback_applications` — which the caller chooses;
+        this method owns only the mechanics, not the policy of what "wider" should be.
+
+        The retry is skipped whenever it could not change the outcome (see `_is_wider`),
+        and the query is embedded ONCE for both attempts — a re-embed would be a second
+        paid call for a byte-identical string.
+
+        Zero passages is the trigger, not a low `top_confidence`: `score_threshold` has
+        already applied, so an empty list is the only unambiguous "this scope has
+        nothing" signal. Passages that came back but don't answer are the composer's
+        call, as everywhere else in this pipeline.
+
+        The returned dict carries `fallback_used` so the caller can tell the user which
+        module actually holds the answer.
+        """
+        resolved_collection = _normalize_collection(collection)
+        primary = to_slugs(applications)
+        wider = to_slugs(fallback_applications)
+        vec = await embed_query(query)
+
+        async def attempt(scope: list[str] | None, fallback: bool = False) -> dict:
+            return await self._query(
+                query,
+                vec,
+                collection=resolved_collection,
+                applications=scope,
+                top_k=top_k,
+                score_threshold=score_threshold,
+                doc_type=doc_type,
+                per_doc=per_doc,
+                fallback=fallback,
+            )
+
+        res = await attempt(primary)
+        if res["passages"] or not _is_wider(primary, wider):
+            return res
+        return await attempt(wider, fallback=True)

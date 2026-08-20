@@ -12,7 +12,7 @@ pytestmark = pytest.mark.asyncio
 
 
 def _ctx(message="cách tạo phiếu?") -> TurnContext:
-    return TurnContext(
+    ctx = TurnContext(
         customer=CustomerProfile(customer_id="c1", name="C1", enabled_modules=["m"]),
         session=SessionState(conversation_id="cv1"),
         conversation=Conversation(conversation_id="cv1", customer_id="c1"),
@@ -23,6 +23,11 @@ def _ctx(message="cách tạo phiếu?") -> TurnContext:
         flow_store=AsyncMock(),
         qa_store=AsyncMock(),
     )
+    # The product search goes through search_with_fallback and the Q&A search through
+    # search. Aliasing them to one mock keeps `search.return_value` covering both, which
+    # is what these tests assume, and makes `await_count` the total round-trip count.
+    ctx.rag.search_with_fallback = ctx.rag.search
+    return ctx
 
 
 # ---- pure helpers ----
@@ -282,7 +287,9 @@ async def test_run_uses_contextualized_query_for_search():
         res = await KnowledgeAgent().run(ctx)
 
     assert res.resolved is True
-    ctx.rag.search.assert_any_await(standalone, collection=ANY, applications=None)
+    ctx.rag.search.assert_any_await(
+        standalone, collection=ANY, applications=None, fallback_applications=None
+    )
     assert standalone in call_log[0]  # compose received the standalone question
 
 
@@ -374,3 +381,146 @@ async def test_compose_passes_process_block_as_cached_system_prefix():
 
     assert isinstance(captured["system"], list)
     assert captured["system"][0] is PROCESS_BLOCK
+
+
+# ---- wrong application selected: widened retry + telling the user which module ----
+
+
+def test_other_applications_names_only_the_modules_outside_the_selection():
+    from agent_customer_support.agents.knowledge import _other_applications
+
+    metas = [
+        {"application": "phong_thi_nghiem"},
+        {"application": "mua_sam"},  # the user's own selection — not a mismatch
+        {"confidence": 0.9},  # global document: belongs to no module
+        {"application": "phong_thi_nghiem"},  # duplicate
+    ]
+    # Selection arrives as a display name and the metas carry slugs; comparing the two
+    # forms directly would report the user's own module back at them.
+    assert _other_applications(metas, ["Mua sắm"]) == ["Phòng thí nghiệm"]
+    # An unmapped slug still renders — better a raw slug than a silently dropped module.
+    assert _other_applications([{"application": "khong_biet"}], None) == ["khong_biet"]
+    assert _other_applications([], ["Mua sắm"]) == []
+
+
+async def _run_capturing_compose(ctx, search_result):
+    """Run the agent against one product-search result, returning the compose prompt."""
+    ctx.rag.search_with_fallback = AsyncMock(return_value=search_result)
+    ctx.rag.search = AsyncMock(return_value={"passages": [], "citations": []})  # qa
+    composed = []
+
+    def fake_complete_text(**kwargs):
+        content = kwargs["messages"][0]["content"]
+        if "Đoạn trích" in content:  # the compose call
+            composed.append(content)
+            return "Anh/Chị vui lòng vào menu Mẫu XN." + "x" * 200
+        return ctx.message
+
+    with patch(
+        "agent_customer_support.agents.knowledge.complete_text", side_effect=fake_complete_text
+    ):
+        res = await KnowledgeAgent().run(ctx)
+    return res, composed[0]
+
+
+async def test_search_is_widened_to_every_module_the_customer_is_entitled_to():
+    ctx = _ctx()
+    ctx.customer.enabled_applications = ["Mua sắm", "Phòng thí nghiệm"]
+    ctx.session.selected_applications = ["Mua sắm"]
+    await _run_capturing_compose(ctx, {"passages": ["p"], "citations": [], "metas": []})
+
+    kwargs = ctx.rag.search_with_fallback.await_args.kwargs
+    assert kwargs["applications"] == ["Mua sắm"]
+    # Never wider than the entitlement: a customer must not be told about a module
+    # they did not buy and cannot see in their UI.
+    assert kwargs["fallback_applications"] == ["Mua sắm", "Phòng thí nghiệm"]
+
+
+async def test_a_widened_hit_tells_the_composer_which_module_it_came_from():
+    ctx = _ctx()
+    ctx.customer.enabled_applications = ["Mua sắm", "Phòng thí nghiệm"]
+    ctx.session.selected_applications = ["Mua sắm"]
+    res, prompt = await _run_capturing_compose(
+        ctx,
+        {
+            "passages": ["p"],
+            "citations": ["lab#1"],
+            "metas": [{"application": "phong_thi_nghiem", "confidence": 0.9}],
+            "fallback_used": True,
+        },
+    )
+    assert res.resolved is True
+    assert "LƯU Ý PHẠM VI" in prompt
+    assert "Phòng thí nghiệm" in prompt
+
+
+async def test_a_normal_hit_says_nothing_about_scope():
+    """The note costs prompt tokens and risks a confusing aside, so it appears only
+    when retrieval actually had to leave the user's selected module."""
+    ctx = _ctx()
+    ctx.session.selected_applications = ["Mua sắm"]
+    _, prompt = await _run_capturing_compose(
+        ctx,
+        {
+            "passages": ["p"],
+            "citations": [],
+            "metas": [{"application": "mua_sam", "confidence": 0.9}],
+            "fallback_used": False,
+        },
+    )
+    assert "LƯU Ý PHẠM VI" not in prompt
+
+
+async def test_a_widened_hit_on_a_global_document_names_no_module():
+    """Untagged documents are global by design; there is no module to point the user at."""
+    ctx = _ctx()
+    ctx.session.selected_applications = ["Mua sắm"]
+    _, prompt = await _run_capturing_compose(
+        ctx,
+        {
+            "passages": ["p"],
+            "citations": [],
+            "metas": [{"confidence": 0.9}],
+            "fallback_used": True,
+        },
+    )
+    assert "LƯU Ý PHẠM VI" not in prompt
+
+
+async def test_the_scope_note_renders_both_module_lists():
+    """Pins the note's placeholders against its call site. `str.format` resolves every
+    placeholder on each call, so a renamed or newly-added one raises KeyError mid-turn
+    — after the retrieval spend, on exactly the path that was supposed to rescue the
+    answer. Asserting the rendered text is what makes that a test failure instead."""
+    ctx = _ctx()
+    ctx.customer.enabled_applications = ["Mua sắm", "Phòng thí nghiệm", "Quản lý kho"]
+    ctx.session.selected_applications = ["Mua sắm", "Quản lý kho"]
+    _, prompt = await _run_capturing_compose(
+        ctx,
+        {
+            "passages": ["p"],
+            "citations": [],
+            "metas": [{"application": "phong_thi_nghiem", "confidence": 0.9}],
+            "fallback_used": True,
+        },
+    )
+    note = prompt.split("LƯU Ý PHẠM VI")[1]
+    assert "{" not in note, "an unfilled placeholder leaked into the prompt"
+    assert "Mua sắm, Quản lý kho" in note  # what the user selected
+    assert "Phòng thí nghiệm" in note  # where the passages actually came from
+
+
+async def test_no_scope_note_without_a_selection_to_contrast_against():
+    """A widened retry is impossible with no selection (an empty scope is already
+    global), but the note must not half-render if a caller ever gets there."""
+    agent = KnowledgeAgent()
+    with patch("agent_customer_support.agents.knowledge.complete_text", return_value="ok") as llm:
+        await agent._compose(
+            "q",
+            ["p"],
+            "",
+            get_settings(),
+            other_applications=["Phòng thí nghiệm"],
+            selected_applications=None,
+        )
+    assert "LƯU Ý PHẠM VI" not in llm.call_args.kwargs["messages"][0]["content"]

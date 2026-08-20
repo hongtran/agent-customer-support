@@ -24,11 +24,20 @@ def _patch_compose(monkeypatch, agent):
     cap = {}
 
     async def fake_compose(
-        question, passages, transcript, cfg, allow_clarify=True, qa_passages=None, qa_leads=False
+        question,
+        passages,
+        transcript,
+        cfg,
+        allow_clarify=True,
+        qa_passages=None,
+        qa_leads=False,
+        other_applications=None,
+        selected_applications=None,
     ):
         cap["passages"] = passages
         cap["qa_passages"] = qa_passages
         cap["qa_leads"] = qa_leads
+        cap["other_applications"] = other_applications
         return "Anh/Chị vui lòng làm theo hướng dẫn."  # plain answer, no marker
 
     monkeypatch.setattr(agent, "_compose", fake_compose)
@@ -64,6 +73,9 @@ async def test_qa_leads_when_above_threshold(monkeypatch):
             {"passages": ["cs answer"], "citations": ["abc"], "top_confidence": 0.95}
         )
     )
+    # Product retrieval goes through search_with_fallback, Q&A through search;
+    # the dispatch keys off `collection`, so one stub serves both.
+    ctx.rag.search_with_fallback = ctx.rag.search
     res = await agent.run(ctx)
     assert cap["qa_passages"] == ["cs answer"]
     assert cap["qa_leads"] is True
@@ -81,6 +93,9 @@ async def test_qa_supplementary_when_below_threshold(monkeypatch):
             {"passages": ["cs answer"], "citations": ["abc"], "top_confidence": 0.4}
         )
     )
+    # Product retrieval goes through search_with_fallback, Q&A through search;
+    # the dispatch keys off `collection`, so one stub serves both.
+    ctx.rag.search_with_fallback = ctx.rag.search
     await agent.run(ctx)
     assert cap["qa_passages"] == ["cs answer"]
     assert cap["qa_leads"] is False
@@ -94,6 +109,9 @@ async def test_qa_search_failure_degrades_to_product_only(monkeypatch):
     # ValueError is what Qdrant local mode raises for a missing collection; the
     # narrowed except in _safe_qa_search catches store failures, not RuntimeError.
     ctx.rag.search = AsyncMock(side_effect=_search_dispatch(ValueError("no collection")))
+    # Product retrieval goes through search_with_fallback, Q&A through search;
+    # the dispatch keys off `collection`, so one stub serves both.
+    ctx.rag.search_with_fallback = ctx.rag.search
     await agent.run(ctx)  # must not raise
     assert cap["qa_passages"] == []
     assert cap["qa_leads"] is False
@@ -108,6 +126,9 @@ async def test_applications_filter_passed_to_qa_search(monkeypatch):
     ctx.rag.search = AsyncMock(
         side_effect=_search_dispatch({"passages": [], "citations": [], "top_confidence": 0.0})
     )
+    # Product retrieval goes through search_with_fallback, Q&A through search;
+    # the dispatch keys off `collection`, so one stub serves both.
+    ctx.rag.search_with_fallback = ctx.rag.search
     await agent.run(ctx)
     cfg = get_settings()
     ctx.rag.search.assert_any_await(

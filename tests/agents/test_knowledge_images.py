@@ -52,11 +52,11 @@ def _search_result(passage=PASSAGE, application=SLUG):
 
 async def _run(ctx, composed, search=None):
     """Run KnowledgeAgent with retrieval and composition both stubbed."""
-    ctx.rag.search = AsyncMock(
-        side_effect=[
-            search if search is not None else _search_result(),
-            {"passages": [], "citations": [], "top_confidence": 0.0},  # qa collection
-        ]
+    ctx.rag.search_with_fallback = AsyncMock(
+        return_value=search if search is not None else _search_result()
+    )
+    ctx.rag.search = AsyncMock(  # qa collection
+        return_value={"passages": [], "citations": [], "top_confidence": 0.0}
     )
     with patch(
         "agent_customer_support.agents.knowledge.complete_text",

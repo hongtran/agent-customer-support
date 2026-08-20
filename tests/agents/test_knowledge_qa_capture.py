@@ -25,6 +25,7 @@ async def test_confirmed_miss_creates_pending_qa_record(monkeypatch):
     )
     ctx.rag = MagicMock()
     ctx.rag.search = AsyncMock(return_value={"passages": [], "citations": []})
+    ctx.rag.search_with_fallback = ctx.rag.search  # product search entry point
     ctx.backlog = MagicMock()
     ctx.backlog.add = AsyncMock()
     ctx.qa_store = MagicMock()

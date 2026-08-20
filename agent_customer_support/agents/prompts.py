@@ -189,6 +189,19 @@ KNOWLEDGE_RESUME_NO_CLARIFY = (
     "ngữ cảnh, trả lời và NÊU RÕ giả định/điều kiện đang áp dụng."
 )
 
+# Appended to the compose user-content when the passages came from a WIDENED retry —
+# the user's selected module returned nothing, so retrieval fell back to every module
+# they are entitled to (see RagClient.search_with_fallback). Lives in the user content,
+# not the system prefix: the module names change per turn, and PROCESS_BLOCK is
+# cache_control'd, so writing them into the system prompt would break the prompt cache
+# on exactly the turns that already paid for a second Qdrant query.
+KNOWLEDGE_OTHER_APPLICATION_NOTE = (
+    "LƯU Ý PHẠM VI: các ĐOẠN TRÍCH dưới KHÔNG thuộc ứng dụng {selected_applications} user đang chọn, mà thuộc "
+    "ứng dụng: {other_applications}. Nếu bạn dùng chúng để trả lời, hãy kết thúc bằng MỘT câu "
+    "ngắn cho user biết chức năng này nằm ở ứng dụng nào, để lần sau user chọn đúng "
+    "ứng dụng. KHÔNG nhắc tới việc tìm kiếm/lọc tài liệu, KHÔNG bịa thêm ứng dụng khác."
+)
+
 VERIFICATION_PROMPT = """Bạn đang xác minh một lỗi (bug) nghi ngờ của phần mềm CenLab.
 Nhiệm vụ DUY NHẤT: thu thập bằng chứng trước khi chuyển cho nhân viên.
 
