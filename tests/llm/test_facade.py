@@ -1,5 +1,8 @@
 from unittest.mock import patch, MagicMock
-from agent_customer_support.llm import complete_structured, complete_with_tools
+
+import pytest
+
+from agent_customer_support.llm import _modal_client, complete_structured, complete_with_tools
 from agent_customer_support.llm.schemas import TriageDecision
 
 
@@ -121,3 +124,53 @@ def test_complete_structured_returns_none_when_unparsed():
             messages=[{"role": "user", "content": "x"}], schema=TriageDecision
         )
     assert out is None
+
+
+def _modal_call(effort: str, schema=None):
+    fake = {"stop_reason": "stop", "text": "{}", "tool_calls": [], "parsed": None}
+    with (
+        patch("agent_customer_support.llm.get_settings") as gs,
+        patch("agent_customer_support.llm._modal_client", return_value=MagicMock()) as mc,
+        patch("agent_customer_support.llm.openai_complete_with_tools", return_value=fake) as m,
+    ):
+        gs.return_value.agent_model = "modal/qwen3.8-27b"
+        gs.return_value.reasoning_effort = effort
+        gs.return_value.max_output_tokens = 4000
+        complete_with_tools(
+            messages=[{"role": "user", "content": "x"}], tools=[], system=None, schema=schema
+        )
+    mc.assert_called_once()
+    return m.call_args.kwargs
+
+
+def test_routes_modal_prefix_to_self_hosted_vllm():
+    kwargs = _modal_call("low", schema=TriageDecision)
+    # vLLM knows the model by its --served-model-name; the prefix is ours.
+    assert kwargs["model"] == "qwen3.8-27b"
+    assert kwargs["schema"] is TriageDecision
+    assert kwargs["max_tokens"] == 4000
+    # Server-side sampling defaults, and no OpenAI-only top-level reasoning_effort.
+    assert kwargs["temperature"] is None
+    assert kwargs["reasoning_effort"] is None
+    assert kwargs["extra_body"] == {"chat_template_kwargs": {"reasoning_effort": "low"}}
+
+
+@pytest.mark.parametrize(
+    ("effort", "qwen_effort"),
+    [("minimal", "low"), ("low", "low"), ("medium", "medium"), ("high", "xhigh")],
+)
+def test_modal_maps_effort_to_values_the_qwen_template_accepts(effort, qwen_effort):
+    """The chat template raises on anything but low|medium|xhigh — 'high' included."""
+    kwargs = _modal_call(effort)
+    assert kwargs["extra_body"]["chat_template_kwargs"]["reasoning_effort"] == qwen_effort
+
+
+@pytest.mark.parametrize(("base_url", "api_key"), [("", "k"), ("https://x.modal.run/v1", "")])
+def test_modal_client_requires_url_and_key(base_url, api_key):
+    _modal_client.cache_clear()
+    with patch("agent_customer_support.llm.get_settings") as gs:
+        gs.return_value.modal_llm_base_url = base_url
+        gs.return_value.modal_llm_api_key = api_key
+        with pytest.raises(RuntimeError, match="MODAL_LLM_BASE_URL"):
+            _modal_client()
+    _modal_client.cache_clear()

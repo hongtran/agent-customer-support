@@ -4,6 +4,7 @@ import pytest
 
 from agent_customer_support.agents.context import TurnContext
 from agent_customer_support.agents.knowledge import KnowledgeAgent
+from agent_customer_support.llm.schemas import CitedSource, ComposedAnswer
 from agent_customer_support.models import Conversation, CustomerProfile, SessionState
 
 pytestmark = pytest.mark.asyncio
@@ -59,8 +60,8 @@ async def _run(ctx, composed, search=None):
         return_value={"passages": [], "citations": [], "top_confidence": 0.0}
     )
     with patch(
-        "agent_customer_support.agents.knowledge.complete_text",
-        return_value=composed,
+        "agent_customer_support.agents.knowledge.complete_structured",
+        return_value=ComposedAnswer(answer=composed, cited=[CitedSource(id="0", section="")]),
     ) as llm:
         res = await KnowledgeAgent().run(ctx)
     return res, llm

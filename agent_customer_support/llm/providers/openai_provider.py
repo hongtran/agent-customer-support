@@ -38,6 +38,8 @@ def openai_complete_with_tools(
     max_tokens: int | None = None,
     reasoning_effort: str | None = None,
     schema: type[BaseModel] | None = None,
+    extra_body: dict | None = None,
+    temperature: float | None = 0.5,
 ) -> dict:
     msgs = list(messages)
     if system:
@@ -56,10 +58,14 @@ def openai_complete_with_tools(
             kwargs["reasoning_effort"] = reasoning_effort
     else:
         kwargs["max_tokens"] = max_tokens or _DEFAULT_MAX_TOKENS
-        kwargs["temperature"] = 0.5
+        # None leaves sampling to the server — a self-hosted model's own
+        # generation_config, rather than a value tuned for OpenAI models.
+        if temperature is not None:
+            kwargs["temperature"] = temperature
     if tools:
         kwargs["tools"] = to_openai_tools(tools)
-
+    if extra_body:
+        kwargs["extra_body"] = extra_body
     if schema is not None:
         # `.parse` is `.create` plus schema-constrained decoding and Pydantic
         # validation of the result. The SDK derives the strict JSON schema from the

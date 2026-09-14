@@ -34,12 +34,82 @@ class TriageDecision(BaseModel):
     )
 
 
-class GuardrailVerdict(BaseModel):
-    """Output-guardrail decision on a composed reply."""
+class CitedSource(BaseModel):
+    """One source the answer used, and which part of it.
+
+    `id` addresses the source; `section` narrows it to the heading inside that passage
+    whose content actually reached the answer. A chunk often carries several headings --
+    a document title followed by a subsection, say -- so which one applies is not
+    decidable from the chunk alone. Only the answer knows.
+
+    The same `id` may appear twice with different sections when the answer drew on two
+    parts of one chunk. It must never appear twice with the SAME section, and `section`
+    must never be a heading the answer did not use: this is a record of what was used,
+    not an index of what was available.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    flag: bool = Field(description="true when the reply must be replaced")
+    id: str = Field(
+        description=(
+            'Nguồn: chỉ số đoạn trích ("0", "1"...), "qa:<i>" cho đáp án CS, '
+            '"quy_trinh_chung" cho QUY TRÌNH.'
+        )
+    )
+    # Required with "" as the no-value case, not optional: OpenAI strict mode drops a
+    # defaulted field from `required`.
+    section: str = Field(
+        description=(
+            "Tiêu đề mục (heading) trong đoạn trích mà bạn thực sự lấy nội dung, chép "
+            "NGUYÊN VĂN, bỏ dấu # và bỏ số thứ tự đầu. Rỗng nếu đoạn trích không có "
+            'heading, hoặc id là "quy_trinh_chung".'
+        )
+    )
+
+
+class ComposedAnswer(BaseModel):
+    """A composed reply plus the sources it stands on.
+
+    Deliberately a thin envelope: `answer` carries the reply EXACTLY as the free-text
+    composer used to produce it, markers and all ([[clarify]], [[no_answer]],
+    [[suspected_bug:...]], [[img:...]]), and `parse_markers` still reads them out of it.
+    Only the citation list is promoted to a typed field. The alternative -- modelling
+    every marker as a schema field -- would mean rewriting the most heavily tuned prompt
+    in the repo to buy a guarantee the markers already have.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    answer: str = Field(
+        description=(
+            "Câu trả lời tiếng Việt đầy đủ cho người dùng, GIỮ NGUYÊN mọi marker "
+            "([[clarify]], [[no_answer]], [[suspected_bug:...]], [[img:...]]) đúng như "
+            "hướng dẫn trong system prompt."
+        )
+    )
+    cited: list[CitedSource] = Field(
+        description=(
+            "Các nguồn THỰC SỰ được dùng để viết câu trả lời, kèm tiêu đề mục đã dùng. "
+            "Rỗng nếu không dùng nguồn nào."
+        )
+    )
+
+
+class GroundingVerdict(BaseModel):
+    """Whether every claim in a reply is supported by the sources it cited.
+
+    Narrower than the moderation verdict it replaced: this judge sees the cited
+    passages and rules on grounding alone. Tone, scope and prompt-leakage are not its
+    job -- scope is triage's gate, and mixing the three into one verdict is what made
+    the previous single guardrail prompt hard to tune.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    grounded: bool = Field(description="true when every claim is supported by the sources")
     # Required, not optional: OpenAI strict mode demands every property appear in
     # `required`, and a field with a default would be dropped from it.
-    reason: str = Field(description="short reason; empty string when flag is false")
+    reason: str = Field(description="short reason; empty string when grounded is true")
+    unsupported_claims: list[str] = Field(
+        description="the specific claims with no support; empty list when grounded is true"
+    )

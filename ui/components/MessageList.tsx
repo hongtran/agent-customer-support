@@ -1,6 +1,7 @@
 // ui/components/MessageList.tsx
 "use client";
 
+import type { Citation } from "@/lib/api";
 import {
   createContext,
   Fragment,
@@ -17,6 +18,8 @@ export interface Message {
   role: "user" | "agent" | "error";
   content: string;
   messageId?: string;
+  /** The sources this answer declared and the server could verify. See lib/api.ts. */
+  citations?: Citation[];
   // `url` is a presigned S3 link, filled in from the chat response. It is absent
   // for the optimistic echo rendered before the request completes, so the chip
   // below doubles as the pre-upload placeholder.
@@ -364,6 +367,51 @@ function AgentAvatar() {
   );
 }
 
+/**
+ * The sources behind one answer, collapsed by default.
+ *
+ * Collapsed because the answer is the point and the sources are the check on it —
+ * expanding is a deliberate act ("where did this come from?"), not something every
+ * reader should have to scroll past. Renders nothing at all when the list is empty,
+ * which is the normal case for a clarifying question or a handoff: those replies were
+ * not composed from a source, so an empty "Nguồn (0)" row would be noise.
+ */
+function Sources({ citations }: { citations: Citation[] }) {
+  const [open, setOpen] = useState(false);
+  if (citations.length === 0) return null;
+
+  return (
+    <div className="pl-1">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
+      >
+        <span className={`transition-transform ${open ? "rotate-90" : ""}`} aria-hidden="true">
+          ▸
+        </span>
+        Nguồn ({citations.length})
+      </button>
+      {open && (
+        <ul className="mt-1 flex flex-col gap-1 border-l border-gray-200 pl-3 text-xs">
+          {citations.map((c) => (
+            // One document can now appear twice, once per section it contributed.
+            <li key={`${c.doc_id}:${c.section ?? ""}`} className="text-gray-600">
+              {c.label}
+              {/* The module is a suffix to the section, but a chunk with no heading is
+                  already labelled by its module — repeating it would read as a stutter. */}
+              {c.application && c.application !== c.label && (
+                <span className="ml-1 text-gray-400">· {c.application}</span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 /** Thumbs-up outline; the dislike button reuses it rotated 180°. */
 function ThumbIcon({ filled }: { filled: boolean }) {
   return (
@@ -506,6 +554,7 @@ export default function MessageList({ messages, loading, onFeedbackDown }: Props
                   <div className="rounded-2xl rounded-tl-sm px-4 py-2 text-sm bg-gray-100 text-gray-800">
                     <Markdown text={msg.content} />
                   </div>
+                  <Sources citations={msg.citations ?? []} />
                   {msg.messageId && (
                     <div className="flex items-center gap-1 pl-1 h-7">
                       <button

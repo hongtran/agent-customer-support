@@ -13,14 +13,16 @@ from agent_customer_support.agents.prompts import (
     KNOWLEDGE_RESUME_NO_CLARIFY,
     PROCESS_BLOCK,
 )
+from agent_customer_support import citations as cite
 from agent_customer_support import doc_images
 from agent_customer_support.applications import APPLICATION_NAMES, to_slugs
 from agent_customer_support.config import Settings, get_settings
-from agent_customer_support.llm import complete_text
+from agent_customer_support.llm import complete_structured, complete_text
 from agent_customer_support.llm.normalize import (
     to_anthropic_content,
     to_openai_content,
 )
+from agent_customer_support.llm.schemas import ComposedAnswer
 from agent_customer_support.models import AgentResult, QARecord
 from agent_customer_support.observability import tracing
 
@@ -67,8 +69,30 @@ def parse_markers(text: str) -> tuple[str, str | None, str | None]:
     return (text or "").strip(), None, None
 
 
-def _passages_block(passages: list[str]) -> str:
-    return "\n\n".join(f"[{i}] {p}" for i, p in enumerate(passages))
+def _passages_block(passages: list[str], with_sections: bool = False) -> str:
+    """Number the passages for the composer, optionally listing each one's headings.
+
+    The heading list turns "name the section you used" from a guess into a choice from a
+    closed set. Without it the model reaches for whatever looks most like a title, which
+    in this corpus is the summary line prepended to every chunk — not a heading at all,
+    so the declaration fails validation and the citation loses its section.
+
+    Reuses `cite.sections`, the same function `cite.select` validates the answer against.
+    Sharing that call is the point: the list the model reads and the whitelist it is
+    judged by cannot drift apart.
+
+    A passage with no headings gets no annotation rather than an empty one, and the Q&A
+    block never asks for annotation — CS records are authored prose and carry no headings.
+    """
+    out = []
+    for i, p in enumerate(passages):
+        head = f"[{i}]"
+        if with_sections:
+            names = cite.sections(p)
+            if names:
+                head = f"{head} (các mục trong đoạn này: {' | '.join(names)})\n"
+        out.append(f"{head} {p}")
+    return "\n\n".join(out)
 
 
 def _other_applications(metas: list[dict], selected: list[str] | None) -> list[str]:
@@ -148,13 +172,17 @@ class KnowledgeAgent:
         qa_leads: bool = False,
         other_applications: list[str] | None = None,
         selected_applications: list[str] | None = None,
-    ) -> str:
+    ) -> ComposedAnswer:
         """Compose a grounded answer from the always-on process + retrieved passages.
 
         When CS-verified Q&A passages are present, switch to the three-source prompt
         and append a CS-answer block — marked authoritative when qa_leads, else
         supplementary. With no qa_passages, behavior is identical to the two-source
         path (default).
+
+        Returns the reply together with the sources the model says it used. The prose
+        itself is unchanged by this: `answer` still carries every marker inline, so
+        `parse_markers` reads it exactly as it read the old free-text return.
         """
         qa_passages = qa_passages or []
         if _HAS_PRIOR_TURN in transcript:
@@ -162,7 +190,8 @@ class KnowledgeAgent:
         else:
             history = ""
         content = (
-            f"{history}Câu hỏi hiện tại: {question}\n\nĐoạn trích:\n{_passages_block(passages)}"
+            f"{history}Câu hỏi hiện tại: {question}\n\n"
+            f"Đoạn trích:\n{_passages_block(passages, with_sections=True)}"
         )
         if qa_passages:
             header = (
@@ -184,10 +213,28 @@ class KnowledgeAgent:
             )
         if not allow_clarify:
             content = f"{content}\n\n{KNOWLEDGE_RESUME_NO_CLARIFY}"
-        return complete_text(
-            messages=[{"role": "user", "content": content}],
-            system=[PROCESS_BLOCK, {"type": "text", "text": compose_prompt}],
-            model=cfg.model_for("knowledge"),
+        messages = [{"role": "user", "content": content}]
+        system: list[dict] = [PROCESS_BLOCK, {"type": "text", "text": compose_prompt}]
+        model = cfg.model_for("knowledge")
+
+        composed = complete_structured(
+            messages=messages,
+            system=system,
+            model=model,
+            schema=ComposedAnswer,
+        )
+        if composed is not None:
+            return composed
+
+        # Constrained decoding produced nothing usable — a refusal, a truncation, or an
+        # API error. Retry as plain text and ship the answer uncited rather than losing
+        # it: contextualize and retrieval have already been paid for, and an answer
+        # without its source list is strictly better than no answer. Same trade-off
+        # Coordinator._store_attachments makes when S3 is down.
+        logger.warning("compose returned no structured answer, retrying as free text")
+        return ComposedAnswer(
+            answer=complete_text(messages=messages, system=system, model=model),
+            cited=[],
         )
 
     async def _safe_qa_search(
@@ -215,7 +262,7 @@ class KnowledgeAgent:
             )
         except (ApiException, ValueError) as exc:
             logger.warning("qa search failed, using product-only: %s", exc)
-            return {"passages": [], "citations": [], "top_confidence": 0.0}
+            return {"passages": [], "citations": [], "metas": [], "top_confidence": 0.0}
 
     async def _with_images(
         self, ctx: TurnContext, passages: list[str], metas: list[dict]
@@ -274,7 +321,6 @@ class KnowledgeAgent:
             fallback_applications=ctx.customer.enabled_applications or None,
         )
         passages = res.get("passages", []) or []
-        citations = res.get("citations", []) or []
         passages, image_catalog = await self._with_images(ctx, passages, res.get("metas", []) or [])
 
         qa_res = await self._safe_qa_search(ctx, query, applications, cfg)
@@ -282,9 +328,11 @@ class KnowledgeAgent:
         qa_leads = (
             bool(qa_passages) and (qa_res.get("top_confidence") or 0.0) >= cfg.qa_lead_threshold
         )
-        qa_citations = qa_res.get("citations", []) or []
-        if qa_citations:
-            citations = citations + [f"qa:{c}" for c in qa_citations]
+
+        # Every source the composer is allowed to name this turn. Built BEFORE compose
+        # because it is the whitelist the composer's answer is checked against
+        # afterwards — the same relationship image_catalog has to the image markers.
+        cite_catalog = cite.catalog(res.get("metas", []) or [], qa_res.get("metas", []) or [])
 
         # Only after a widened retry is there a mismatch worth naming; on a normal hit
         # this stays empty and the compose prompt is byte-identical to before.
@@ -309,13 +357,18 @@ class KnowledgeAgent:
             other_applications=other_applications,
             selected_applications=ctx.session.selected_applications,
         )
-        clean, kind, application = parse_markers(composed)
+        clean, kind, application = parse_markers(composed.answer)
         # Enforce the image contract on whatever the composer produced: only markers this
         # turn's passages actually offered survive, deduped and capped. Checked against the
         # same catalog the passages were rewritten against, so an invented image number is
         # dropped rather than signed. Done here rather than in _finish so a hallucinated
         # image never reaches the persisted turn.
         clean = doc_images.select(clean, image_catalog, cfg.max_reply_images)
+        # Same enforcement for sources: only ids this turn actually offered survive. A
+        # declared id we cannot resolve is dropped rather than shown, because a citation
+        # the user cannot check is worse than no citation at all.
+        citations = cite.select(composed.cited, cite_catalog, passages, qa_passages)
+        cited_passages = cite.passages_for(composed.cited, cite_catalog, passages, qa_passages)
 
         if kind == "suspected_bug":
             return AgentResult(
@@ -324,6 +377,7 @@ class KnowledgeAgent:
                 suspected_bug=True,
                 evidence={"application": application, "summary": ctx.message},
                 citations=citations,
+                cited_passages=cited_passages,
             )
 
         # Clarify / confirm before answering. The composer judged that an element it
@@ -336,10 +390,20 @@ class KnowledgeAgent:
             if not already_clarified:
                 ctx.session.pending = "knowledge_clarify"
                 return AgentResult(reply=clean, resolved=None, citations=citations)
-            return AgentResult(reply=clean, resolved=True, citations=citations)
+            return AgentResult(
+                reply=clean,
+                resolved=True,
+                citations=citations,
+                cited_passages=cited_passages,
+            )
 
         if kind != "no_answer":
-            return AgentResult(reply=clean, resolved=True, citations=citations)
+            return AgentResult(
+                reply=clean,
+                resolved=True,
+                citations=citations,
+                cited_passages=cited_passages,
+            )
 
         # Miss. On the first one, try to disambiguate before giving up to a human:
         # the request may just be vague or use the customer's own terminology.
@@ -350,7 +414,6 @@ class KnowledgeAgent:
                 "ở màn hình/chức năng nào nhé — hoặc chụp giúp mình ảnh màn hình "
                 "đang xem để mình hỗ trợ nhanh hơn.",
                 resolved=None,
-                citations=citations,
             )
 
         # Second miss after a clarification: genuinely not in the KB — log and hand off.
@@ -374,5 +437,4 @@ class KnowledgeAgent:
             reply="Mình chưa tìm thấy thông tin cụ thể này trong tài liệu. "
             "Đã ghi nhận để đội hỗ trợ bổ sung.",
             resolved=False,
-            citations=citations,
         )

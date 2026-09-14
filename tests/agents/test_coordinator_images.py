@@ -5,6 +5,7 @@ import pytest
 from agent_customer_support.agents.coordinator import Coordinator
 from agent_customer_support.models import (
     AgentResult,
+    Citation,
     Conversation,
     CustomerProfile,
     SessionState,
@@ -42,6 +43,9 @@ def _coord(reply: str):
     c.flow = MagicMock()
     c.verification = MagicMock()
     c.escalation = MagicMock()
+    # An ungrounded reply is handed to a human rather than dead-ended, so the flagged
+    # path runs the escalation agent.
+    c.escalation.run = AsyncMock(return_value=AgentResult(reply="Đã chuyển CS.", escalated=True))
     return c
 
 
@@ -115,7 +119,32 @@ async def test_the_output_guardrail_judges_prose_not_signatures():
 
 async def test_a_flagged_reply_is_replaced_and_needs_no_signing():
     c = _coord(f"Anh/Chị nhấn {ICON_MARKER} để tạo hồ sơ.")
-    c.guardrail.check_output = AsyncMock(return_value={"pass": False, "reason": "off-topic"})
+    c.guardrail.check_output = AsyncMock(
+        return_value={"pass": False, "reason": "bịa nút", "unsupported_claims": ["nút X"]}
+    )
     res = await _turn(c)
     assert "img:" not in res.reply
+    assert res.escalated is True
+    # The images belonged to the answer we just threw away; signing one would render a
+    # screenshot next to a reply that no longer says anything about it.
     c.doc_images.presign.assert_not_awaited()
+
+
+async def test_a_flagged_reply_carries_no_citations():
+    """The source list vouched for text the user will never see.
+
+    Leaving it attached would show the user a set of documents next to a generic
+    handoff message, implying the handoff came from them."""
+    c = _coord("Anh/Chị vui lòng vào menu Nguyên nhân.")
+    c.knowledge.run = AsyncMock(
+        return_value=AgentResult(
+            reply="Anh/Chị vui lòng vào menu Nguyên nhân.",
+            resolved=True,
+            citations=[Citation(doc_id="d1", label="Tạo mới biên bản", kind="guide")],
+            cited_passages=["Vào menu Nguyên nhân."],
+        )
+    )
+    c.guardrail.check_output = AsyncMock(return_value={"pass": False, "reason": "bịa nút"})
+    res = await _turn(c)
+    assert res.citations == []
+    assert res.escalated is True

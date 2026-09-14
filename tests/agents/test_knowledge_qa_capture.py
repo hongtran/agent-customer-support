@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 from agent_customer_support.agents.knowledge import KnowledgeAgent
 from agent_customer_support.agents.context import TurnContext
+from agent_customer_support.llm.schemas import ComposedAnswer
 from agent_customer_support.models import CustomerProfile, SessionState, Conversation
 
 pytestmark = pytest.mark.asyncio
@@ -13,7 +14,11 @@ async def test_confirmed_miss_creates_pending_qa_record(monkeypatch):
 
     # Force the "second miss after clarification" path: compose returns a miss marker.
     monkeypatch.setattr(agent, "_contextualize", AsyncMock(return_value="câu hỏi lạ"))
-    monkeypatch.setattr(agent, "_compose", AsyncMock(return_value="[[no_answer]]"))
+    monkeypatch.setattr(
+        agent,
+        "_compose",
+        AsyncMock(return_value=ComposedAnswer(answer="[[no_answer]]", cited=[])),
+    )
 
     session = SessionState(conversation_id="c1", pending="knowledge_clarify")
     ctx = TurnContext(

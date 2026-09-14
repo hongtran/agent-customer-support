@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 from agent_customer_support.agents.knowledge import KnowledgeAgent
 from agent_customer_support.agents.context import TurnContext
 from agent_customer_support.config import get_settings
+from agent_customer_support.llm.schemas import CitedSource, ComposedAnswer
 from agent_customer_support.models import CustomerProfile, SessionState, Conversation
 
 pytestmark = pytest.mark.asyncio
@@ -38,7 +39,13 @@ def _patch_compose(monkeypatch, agent):
         cap["qa_passages"] = qa_passages
         cap["qa_leads"] = qa_leads
         cap["other_applications"] = other_applications
-        return "Anh/Chị vui lòng làm theo hướng dẫn."  # plain answer, no marker
+        # Plain answer, no marker, citing the first passage of each source. Citations
+        # now follow what the composer DECLARES, not what retrieval returned, so a test
+        # about citations has to say which sources the answer used.
+        return ComposedAnswer(
+            answer="Anh/Chị vui lòng làm theo hướng dẫn.",
+            cited=[CitedSource(id="0", section=""), CitedSource(id="qa:0", section="")],
+        )
 
     monkeypatch.setattr(agent, "_compose", fake_compose)
     monkeypatch.setattr(agent, "_contextualize", AsyncMock(return_value="q-standalone"))
@@ -50,6 +57,9 @@ def _search_dispatch(qa_result, product_result=None):
     product_result = product_result or {
         "passages": ["guide"],
         "citations": ["g1"],
+        # `metas` is what the citation catalog is built from — a stub without it
+        # offers the composer no citable source.
+        "metas": [{"doc_id": "g1", "url": "chunks/1. HDSD - Mua sắm.docx", "confidence": 0.5}],
         "top_confidence": 0.5,
     }
 
@@ -70,7 +80,12 @@ async def test_qa_leads_when_above_threshold(monkeypatch):
     ctx.rag = type("R", (), {})()
     ctx.rag.search = AsyncMock(
         side_effect=_search_dispatch(
-            {"passages": ["cs answer"], "citations": ["abc"], "top_confidence": 0.95}
+            {
+                "passages": ["cs answer"],
+                "citations": ["abc"],
+                "metas": [{"source_doc_id": "abc", "confidence": 0.95}],
+                "top_confidence": 0.95,
+            }
         )
     )
     # Product retrieval goes through search_with_fallback, Q&A through search;
@@ -79,8 +94,9 @@ async def test_qa_leads_when_above_threshold(monkeypatch):
     res = await agent.run(ctx)
     assert cap["qa_passages"] == ["cs answer"]
     assert cap["qa_leads"] is True
-    assert "qa:abc" in res.citations
-    assert "g1" in res.citations
+    # The CS record was declared — that is what puts it in front of the grounding judge —
+    # but it is not a document the customer can open, so only the guide is shown.
+    assert {c.doc_id for c in res.citations} == {"g1"}
 
 
 async def test_qa_supplementary_when_below_threshold(monkeypatch):

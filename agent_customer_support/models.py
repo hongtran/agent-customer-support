@@ -192,6 +192,39 @@ class SessionState(BaseModel):
 # ---- Channel I/O ----
 
 
+# ---- Citations ----
+
+
+class Citation(BaseModel):
+    """One source the composed answer declared it used, after validation.
+
+    Not "everything retrieved" — that is what `RagClient.search` returns and what this
+    field used to carry. A Citation exists only because the composer named it AND the id
+    it named was in this turn's catalog (see `citations.select`).
+
+    **No filename appears here.** The source document's name is internal, and this type
+    exists to be shown to the customer, so there is deliberately no field for it to sit
+    in — not a hidden one, not an unused one. `label` is built from the section heading,
+    the application display name, or a fixed constant, and `citations.py` holds no
+    filename it could put there.
+
+    `doc_id` is the raw identifier — a `source_doc_id`/`doc_id` UUID for a guide,
+    `qa:<id>` for a CS-verified Q&A record, or the pseudo-id `quy_trinh_chung` for the
+    always-on process block. It is opaque, and it is a handle for traces, never display.
+    """
+
+    doc_id: str
+    # What the widget prints.
+    label: str
+    # The heading the answer drew from, when one was matched. Kept separate from `label`
+    # so a caller can tell "this row names a section" from "this row is only an
+    # application" — `label` alone cannot distinguish the two.
+    section: str | None = None
+    application: str | None = None
+    kind: Literal["guide", "qa", "process"]
+    confidence: float = 0.0
+
+
 class ChatRequest(BaseModel):
     # No customer_id: identity comes from the access token, never from the body. A
     # client-supplied tenant id was the whole vulnerability this replaced — it feeds
@@ -205,7 +238,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     conversation_id: str
     reply: str
-    citations: list[str] = Field(default_factory=list)
+    citations: list[Citation] = Field(default_factory=list)
     escalated: bool = False
     message_id: str = ""
     # The *user* turn's images, echoed back with presigned URLs so the widget can
@@ -230,4 +263,10 @@ class AgentResult(BaseModel):
     evidence: dict | None = None
     escalated: bool = False
     new_session: SessionState | None = None
-    citations: list[str] = Field(default_factory=list)
+    citations: list[Citation] = Field(default_factory=list)
+    # The text of the passages `citations` point at, carried only from KnowledgeAgent to
+    # the output guardrail so the grounding judge can see what the answer claimed to be
+    # based on without re-running retrieval. Excluded from serialisation on purpose:
+    # Coordinator._traced dumps every AgentResult into a Langfuse span, and full passage
+    # text would bloat every trace for a value nothing downstream reads.
+    cited_passages: list[str] = Field(default_factory=list, exclude=True)

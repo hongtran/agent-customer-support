@@ -6,6 +6,7 @@ from agent_customer_support.agents.prompts import (
     KNOWLEDGE_COMPOSE_PROMPT_WITH_QA,
 )
 from agent_customer_support.config import get_settings
+from agent_customer_support.llm.schemas import CitedSource, ComposedAnswer
 
 pytestmark = pytest.mark.asyncio
 
@@ -13,12 +14,15 @@ pytestmark = pytest.mark.asyncio
 def _capture(monkeypatch):
     cap = {}
 
-    def fake_complete_text(messages, system, model):
+    def fake_compose(*, messages, system, model, schema):
         cap["content"] = messages[0]["content"]
         cap["system_text"] = system[-1]["text"] if isinstance(system, list) else system
-        return "Anh/Chị vui lòng làm theo hướng dẫn."
+        return ComposedAnswer(
+            answer="Anh/Chị vui lòng làm theo hướng dẫn.",
+            cited=[CitedSource(id="0", section="")],
+        )
 
-    monkeypatch.setattr(kn, "complete_text", fake_complete_text)
+    monkeypatch.setattr(kn, "complete_structured", fake_compose)
     return cap
 
 

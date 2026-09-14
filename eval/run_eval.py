@@ -52,6 +52,7 @@ from eval.eval import (
     evaluate_answer,
     evaluate_retrieval,
     fmt_usd,
+    format_citation,
     judge_model,
 )
 from eval.pricing import cost_by_model
@@ -153,9 +154,11 @@ async def _one(test: TestQuestion, mode: str, k: int, scope: bool) -> dict:
             "faithfulness": verdict.faithfulness,
             "feedback": verdict.feedback,
             "answer": run.answer,
-            # Distinct from the retrieval block's `citations`: this is what the agent
-            # attached to its reply, which also carries `qa:`-prefixed Q&A hits.
-            "answer_citations": "|".join(run.citations),
+            # Distinct from the retrieval block's `citations`: those are every chunk
+            # retrieved, this is only what the composed answer declared and `citations
+            # .select` could verify -- so it is usually shorter, and it is the section
+            # labels the customer sees rather than filenames.
+            "answer_citations": "|".join(format_citation(c) for c in run.citations),
             # Cost/latency of the agent under test, kept apart from the judge's own
             # spend so a model comparison is not diluted by the fixed judge.
             "latency_s": round(run.cost.latency_s, 3),

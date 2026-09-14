@@ -118,11 +118,35 @@ export interface AttachmentRef {
   url: string;
 }
 
+/**
+ * One source the answer declared it used, after the server validated the declaration
+ * against what retrieval actually returned. Never the full retrieved set — an answer
+ * that used one guide cites one guide.
+ *
+ * There is deliberately no filename here: source document names are internal, and the
+ * server has no field to send one in. `label` is the section heading the answer drew
+ * from, falling back to the application name when the chunk carried no heading.
+ *
+ * `kind` distinguishes a product guide from a CS-verified Q&A record and from the
+ * always-on operating process, which has no document behind it.
+ */
+export interface Citation {
+  doc_id: string;
+  label: string;
+  /** Present only when a heading was matched; `label` equals it when so. */
+  section?: string | null;
+  application?: string | null;
+  kind: "guide" | "qa" | "process";
+  confidence: number;
+}
+
 export interface ChatResult {
   reply: string;
   message_id?: string;
   /** The images from the message just sent, now stored and signed for display. */
   attachments?: AttachmentRef[];
+  /** The sources behind this reply, for the user to check the answer against. */
+  citations?: Citation[];
 }
 
 export async function sendMessage(payload: ChatPayload): Promise<ChatResult> {
@@ -136,7 +160,12 @@ export async function sendMessage(payload: ChatPayload): Promise<ChatResult> {
   }
 
   const data = await res.json();
-  return { reply: data.reply, message_id: data.message_id, attachments: data.attachments };
+  return {
+    reply: data.reply,
+    message_id: data.message_id,
+    attachments: data.attachments,
+    citations: data.citations,
+  };
 }
 
 export async function getMyApplications(): Promise<string[]> {

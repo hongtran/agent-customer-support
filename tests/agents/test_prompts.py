@@ -1,7 +1,7 @@
 from agent_customer_support.agents.prompts import (
     TRIAGE_PROMPT,
     VERIFICATION_PROMPT,
-    GUARDRAIL_OUTPUT_PROMPT,
+    GROUNDING_JUDGE_PROMPT,
     KNOWLEDGE_CONTEXTUALIZE_PROMPT,
     KNOWLEDGE_COMPOSE_PROMPT,
     PROCESS_CONTEXT,
@@ -13,7 +13,7 @@ def test_prompts_are_nonempty_strings():
     for p in (
         TRIAGE_PROMPT,
         VERIFICATION_PROMPT,
-        GUARDRAIL_OUTPUT_PROMPT,
+        GROUNDING_JUDGE_PROMPT,
         KNOWLEDGE_CONTEXTUALIZE_PROMPT,
         KNOWLEDGE_COMPOSE_PROMPT,
         PROCESS_CONTEXT,

@@ -45,15 +45,18 @@ The `Coordinator` (`agents/coordinator.py`) orchestrates:
 4. **Verification** — multi-turn evidence collection when a bug is suspected (state preserved in `session.pending = "verify_issue"`)
 5. **Flow** — walks the user through a step/transition/outcome tree (e.g. account recovery)
 6. **Escalation** — posts to Zalo webhook and returns a handoff reply
-7. **Output guardrail** — replaces hallucinated/out-of-scope replies
+7. **Output guardrail** — grounding check on a reply that cited a passage; an
+   unsupported answer is replaced and handed off (see Citations below)
 
 Every agent receives a `TurnContext` (`agents/context.py`) and returns `AgentResult` (`models.py`). The `Agent` protocol (`agents/base.py`) is a structural interface — just `name: str` and `async def run(ctx) -> AgentResult`.
 
 ### LLM layer
 
-`llm/__init__.py` exports `complete_with_tools` and `complete_text` — these are the only LLM call sites. Model routing is automatic: model names containing `"claude"` use the Anthropic provider; everything else uses OpenAI. Per-agent model overrides are configured in `Settings` (`config.py`) and accessed via `settings.model_for("triage")` etc.
+`llm/__init__.py` exports `complete_with_tools` and `complete_text` — these are the only LLM call sites. Model routing is automatic, by model name: an `openrouter/` prefix goes to OpenRouter, a `modal/` prefix to the self-hosted vLLM server, names containing `"claude"` to Anthropic, and everything else to OpenAI. The two prefixed routes reuse the OpenAI provider with a different client; the prefix is stripped before the call. Per-agent model overrides are configured in `Settings` (`config.py`) and accessed via `settings.model_for("triage")` etc.
 
 The OpenAI provider builds request params per model family (`llm/providers/openai_provider.py`): reasoning models (`gpt-5*`, `o1/o3/o4*`) get `max_completion_tokens` + `reasoning_effort` and **no** `temperature`; older models keep `max_tokens` + `temperature=0.5`. The facade resolves the reasoning profile once from `Settings` and passes it down, so providers stay pure functions of their arguments. Effort and the token ceiling are enforced by `ENVIRONMENT` alone — `dev` → `low`/4000, `prod` → `high`/8000 (`_REASONING_EFFORT_BY_ENV` in `config.py`); there is no per-key override by design.
+
+**Self-hosted Qwen (`modal/…`).** `qwen/serve.py` runs vLLM on Modal with two profiles picked by the `PROFILE` constant: `l4-9b` (default; `Qwen/Qwen3.5-9B` on an L4 with thinking off — a cheap plumbing test, not a quality baseline; T4 hangs at startup) and `h100-27b` (`Qwen/Qwen3.8-27B-FP8` on an H100). Both scale to zero (the first call after 5 idle minutes waits for a cold start of minutes). It is a `@modal.web_server` Function, not `@app.server`: a Server answers 503 while no container is ready, which failed every cold-start turn; a web Function holds the request. `PROFILE` is a constant, not an env var, because Modal re-imports the file inside the container. It is guarded by vLLM's `--api-key`, not Modal proxy auth, so a plain OpenAI client works. Three details are load-bearing: `--reasoning-parser qwen3` keeps the thinking out of `message.content` — without it every `ComposedAnswer` parse fails; the env effort is translated through `_QWEN_REASONING_EFFORT` into `chat_template_kwargs`, because the Qwen3.8 chat template raises on anything but `low|medium|xhigh` (OpenAI's `high` included; the Qwen3.5 template ignores the kwarg); and `temperature=None` leaves sampling to the model's own `generation_config.json` instead of the 0.5 tuned for OpenAI models.
 
 ### RAG
 
@@ -173,6 +176,85 @@ inline glyph vs a clickable preview thumbnail.
 `kind` is derived from the ref's position in the source markdown — alone on a line means a
 screenshot, sharing a line (a table cell) means a button glyph. That costs nothing, where
 an object-size check would cost an S3 HEAD per image on the request path.
+
+### Citations and grounding
+
+An answer names its own sources. `_compose` returns a `ComposedAnswer`
+(`llm/schemas.py`) — `{answer, cited}` — instead of free text, and `citations.py` is the
+whole transform from that raw declaration to the source list the widget shows. This is a
+**hybrid** on purpose: `answer` still carries every marker inline (`[[clarify]]`,
+`[[no_answer]]`, `[[suspected_bug:…]]`, `[[img:…]]`) and `parse_markers` still reads them
+out of it, so the heavily tuned compose prompt was appended to, never rewritten. Only the
+citation list is promoted to a typed field.
+
+**The catalog, not the shape, is the guard** — the same rule, for the same reason, as
+`doc_images.select`. `citations.catalog` is built from this turn's `metas` *before*
+compose, and `citations.select` keeps a declared id only if the catalog holds it. A model
+that declares `"7"` when six passages came back writes a perfectly well-formed id, and a
+citation the user cannot check is worse than no citation at all. Validation needs no
+Qdrant round-trip: the passages and their metadata are already in memory.
+
+**All three sources are declarable; only guides are displayed.** Product passages by
+position (`"0"`, `"1"`), Q&A records by `"qa:<i>"`, and the always-on process block by the
+pseudo-id **`quy_trinh_chung`**. A source row has to answer "where did this come from?"
+with somewhere the reader can actually go, and the process block and the CS-verified Q&A
+store are ours, not the customer's — naming them points at nothing they can open. So
+`citations.select` keeps only `kind == "guide"`, and an answer resting solely on the other
+two shows **no sources at all**, which is the honest outcome.
+
+The other two stay *declarable* on purpose, and `select` is the only place they are
+dropped. `passages_for` feeds the grounding judge from the same declarations, so removing
+the Q&A ids would leave a mixed guide+CS answer judged against the guide alone and its
+CS-derived claims flagged as unsupported. And taking the process id out of the prompt would
+push the model to attribute a process claim to whichever passage is nearest — the
+fabricated citation the whole mechanism exists to prevent.
+
+**A citation names a section, never a file.** Each declaration carries the markdown heading
+inside that passage whose content actually reached the answer (`CitedSource.section`), so a
+row reads `Quy trình tổng thể – Vòng đời PYC · Yêu cầu thử nghiệm`. A chunk usually holds
+several headings — often the guide's own `#` title above the `##` section it really covers
+— so which one applies is not decidable from the chunk; only the answer knows.
+`citations.sections` parses the candidates, and `_passages_block` lists them back to the
+composer per passage (`(các mục trong đoạn này: … | …)`) so it **chooses from a closed set**
+rather than guessing what looks like a title — left to guess, it picks the summary sentence
+prepended to every chunk, which is not a heading and fails validation. The same function
+serves both jobs on purpose: the list the model reads and the whitelist it is judged by
+cannot drift apart. It is never shown to the *user*, though — listing every heading a chunk
+contains would claim the answer used material it did not. A declared heading absent from
+that passage is dropped and the citation survives without one, because pointing at the
+wrong part of a guide is worse than pointing at the guide.
+
+Both sides of that comparison run through `_clean_heading`, which strips the outline number,
+markdown emphasis and a trailing colon — the guides write `##### **Import ký hiệu mẫu:**`
+and the reader wants `Import ký hiệu mẫu`. Cleaning only the candidate would reject exactly
+the well-behaved answers, since the prompt asks for the clean form.
+
+Source **filenames never leave the server**. `Citation` has no field one could sit in and
+`citations.py` holds none to put there — the constraint is structural, not a UI convention.
+`label` falls back to the application display name for a heading-less chunk (the corpus
+contains chunks that open mid-table), then to a fixed constant for an untagged global
+document. `select` dedupes on `(label, application)` — what the user sees — so one guide
+cited for two sections is two rows, while two heading-less chunks of one application are
+one.
+
+`AgentResult.citations` therefore means **"what the answer declared and we could verify"**,
+not "everything retrieved" as it did before. The clarify and no-answer paths cite nothing:
+those replies are canned text, not composed from a source.
+
+The **output guardrail** (`agents/guardrail.py`) is the second half. It receives the reply
+plus `AgentResult.cited_passages` — only the passages the answer stood on — and rules on
+grounding alone; scope stays triage's job, and mixing the two is what made the previous
+single moderation verdict hard to tune. **Empty `cited_passages` means no LLM call at
+all**: every non-knowledge route and every clarify/process-only reply lands there, and
+judging them would flag correct replies while spending a call on every turn. It still
+fails OPEN. A flagged reply is replaced with `_FALLBACK_REPLY` and escalated, and its
+citations are dropped — they vouched for text the user will never see.
+
+`cited_passages` carries `exclude=True`: `Coordinator._traced` dumps every `AgentResult`
+into a Langfuse span, and full passage text would bloat every trace.
+
+Citations are **not** persisted on the `Turn` — reloading history shows answers without
+their source lists.
 
 ### Flows
 

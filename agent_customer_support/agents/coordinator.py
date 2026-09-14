@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 _BLOCK_REPLY = (
     "Xin lỗi, mình chưa thể xử lý nội dung này. Bạn vui lòng nhập câu hỏi về phần mềm CenLab nhé."
 )
-_FALLBACK_REPLY = "Xin lỗi, mình cần kiểm tra lại thông tin này. Bạn vui lòng thử lại hoặc yêu cầu gặp nhân viên hỗ trợ."
+_FALLBACK_REPLY = "Xin lỗi, mình cần kiểm tra lại thông tin này. Bạn vui lòng hỏi lại sau hoặc yêu cầu gặp nhân viên hỗ trợ."
 
 
 class Coordinator:
@@ -117,14 +117,23 @@ class Coordinator:
             # 3-6. Route
             result = await self._route(ctx, session)
 
-            # 7. Output guardrail
-            # gout = await self.guardrail.check_output(result.reply)
-            # if not gout["pass"]:
-            #     result = AgentResult(
-            #         reply=_FALLBACK_REPLY,
-            #         escalated=result.escalated,
-            #         new_session=result.new_session,
-            #     )
+            # 7. Output guardrail — grounding only, and only for a reply that cited
+            # something. `cited_passages` is empty for every other route (flow,
+            # escalation, out_of_scope) and for knowledge replies that cited nothing, so
+            # check_output short-circuits there without an LLM call.
+            gout = await self.guardrail.check_output(result.reply, result.cited_passages)
+            if not gout["pass"]:
+                logger.warning("ungrounded reply, escalating: %s", gout.get("reason"))
+                # Hand off rather than dead-end. We already know the composed answer
+                # cannot be trusted, and the citations belonged to that answer — dropping
+                # them keeps a source list from vouching for text the user never sees.
+                result = await self._traced(
+                    "escalation",
+                    lambda: self.escalation.run(ctx, reason="ungrounded answer"),
+                    ctx,
+                )
+                result.reply = _FALLBACK_REPLY
+                result.citations = []
             resp = await self._finish(ctx, result, session)
             turn.update(output={"reply": resp.reply, "escalated": resp.escalated})
             return resp

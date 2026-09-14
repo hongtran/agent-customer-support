@@ -36,6 +36,13 @@ class Settings(BaseSettings):
     # Per-agent model overrides — default to agent_model if unset
     triage_model: str | None = "gpt-5.4-mini"
     knowledge_model: str | None = "gpt-5.6-luna"
+    openrouter_api_key: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    # Self-hosted vLLM on Modal (qwen/serve.py), used by `modal/<served-name>` models.
+    # Base URL ends in /v1; the key is the VLLM_API_KEY in the Modal secret.
+    modal_llm_base_url: str = ""
+    modal_llm_api_key: str = ""
+    # knowledge_model: str | None = "openrouter/qwen/qwen3.5-9b"
     knowledge_contextualize_model: str | None = "gpt-5.4-mini"
     verification_model: str | None = "gpt-5.4-mini"
     flow_model: str | None = "gpt-5.4-mini"

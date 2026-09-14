@@ -75,7 +75,15 @@ export default function Home() {
           const i = next.findLastIndex((m) => m.role === "user");
           if (i !== -1) next[i] = { ...next[i], attachments: result.attachments };
         }
-        return [...next, { role: "agent", content: result.reply, messageId: result.message_id }];
+        return [
+          ...next,
+          {
+            role: "agent",
+            content: result.reply,
+            messageId: result.message_id,
+            citations: result.citations,
+          },
+        ];
       });
     } catch (err) {
       if (err instanceof UnauthorizedError) {

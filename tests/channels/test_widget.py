@@ -1,13 +1,15 @@
 from fastapi.testclient import TestClient
 from unittest.mock import AsyncMock
-from agent_customer_support.models import ChatResponse
+from agent_customer_support.models import ChatResponse, Citation
 from agent_customer_support.server import app, get_agent
 
 
 def test_chat_endpoint_returns_reply(as_user):
     fake = AsyncMock()
     fake.handle_turn.return_value = ChatResponse(
-        conversation_id="cv1", reply="Xin chào", citations=["c#1"]
+        conversation_id="cv1",
+        reply="Xin chào",
+        citations=[Citation(doc_id="c#1", label="Tạo mới biên bản", kind="guide")],
     )
     app.dependency_overrides[get_agent] = lambda: fake
     client = TestClient(app)

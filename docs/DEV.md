@@ -139,6 +139,55 @@ All instrumentation goes through `agent_customer_support/observability/tracing.p
 (the only module that imports `langfuse`); it fails open — any tracing error is
 logged and never breaks a request. Buffered traces are flushed on server shutdown.
 
+## Self-hosted Qwen on Modal
+
+`qwen/serve.py` runs a Qwen model behind vLLM's OpenAI-compatible API. The `PROFILE`
+constant at the top picks the setup:
+
+| Profile | Model | GPU | App model name |
+|---|---|---|---|
+| `l4-9b` (default) | `Qwen/Qwen3.5-9B` (BF16, ~19 GB) | L4 | `modal/qwen3.5-9b` |
+| `h100-27b` | `Qwen/Qwen3.8-27B-FP8` (~28 GB) | H100 | `modal/qwen3.8-27b` |
+
+`l4-9b` is a cheap **plumbing test** (routing, JSON answers, citations), not a quality
+test: 9B with thinking turned off. **Do not use a T4**: vLLM hung compiling Qwen3.5's
+Triton linear-attention kernels on Turing until the 20 min startup timeout.
+
+It scales to zero. A request that arrives with no container running **waits** for the
+cold start (several minutes) — it is a `@modal.web_server` Function, which holds the
+request, not an `@app.server`, which answers 503. For production, use `h100-27b` and
+add `min_containers=1` to `@app.function`.
+
+```bash
+uv tool install modal && modal setup                 # once: CLI + login
+modal secret create qwen-vllm-api-key VLLM_API_KEY="$(openssl rand -hex 32)"
+make modal-download                                  # once: 9B weights into the qwen-weights Volume
+# for h100-27b instead: modal run qwen/download_model.py --repo-id Qwen/Qwen3.8-27B-FP8
+make modal-deploy                                    # prints the server URL
+```
+
+Then in `.env`:
+
+```bash
+MODAL_LLM_BASE_URL=https://<workspace>--qwen-vllm-serve.modal.run/v1   # URL printed by deploy + /v1
+MODAL_LLM_API_KEY=<same value as VLLM_API_KEY>
+KNOWLEDGE_MODEL=modal/qwen3.5-9b        # or modal/qwen3.8-27b for the h100-27b profile
+```
+
+Smoke test (the first call may take minutes while the container starts; `-L` follows
+Modal's 303 redirects during a long wait):
+
+```bash
+curl -L "$MODAL_LLM_BASE_URL/models" -H "Authorization: Bearer $MODAL_LLM_API_KEY"
+```
+
+**If the server fails to start**, watch `modal app logs qwen-vllm`:
+- out of memory → lower `--gpu-memory-utilization` or `--max-num-seqs` (not `--max-model-len`:
+  compose prompts are ~12K tokens plus a 4K output reserve, so below ~20K requests fail with 400)
+- CUDA graph / compile error → add `--enforce-eager` (slower output)
+
+Switch back to OpenRouter with `KNOWLEDGE_MODEL=openrouter/qwen/qwen3.8-27b`.
+
 ## LLM layer note
 
 The runtime LLM client is **vendored** in `agent_customer_support/llm/` (Anthropic +

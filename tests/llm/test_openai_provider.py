@@ -214,3 +214,21 @@ def test_refusal_yields_no_parsed_instance():
         schema=TriageDecision,
     )
     assert out["parsed"] is None
+
+
+def test_temperature_none_lets_server_pick_sampling_defaults():
+    """Self-hosted Qwen ships its own generation_config (temp 1.0, top_k 20); a fixed
+    0.5 would override it and invite repetition in thinking mode."""
+    client = _text_client()
+    openai_complete_with_tools(
+        client=client,
+        model="qwen3.8-27b",
+        messages=[{"role": "user", "content": "hi"}],
+        tools=[],
+        system=None,
+        max_tokens=4000,
+        temperature=None,
+    )
+    kwargs = client.chat.completions.create.call_args.kwargs
+    assert "temperature" not in kwargs
+    assert kwargs["max_tokens"] == 4000

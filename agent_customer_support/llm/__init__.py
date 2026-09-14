@@ -13,6 +13,51 @@ from agent_customer_support.llm.providers.openai_provider import (
 )
 from agent_customer_support.observability import tracing
 
+_OPENROUTER_PREFIX = "openrouter/"
+
+
+@lru_cache
+def _openrouter_client():
+    from openai import OpenAI
+
+    cfg = get_settings()
+    if not cfg.openrouter_api_key:
+        raise RuntimeError(
+            "OPENROUTER_API_KEY is unset but a model is routed to OpenRouter "
+            "(model name starts with 'openrouter/')"
+        )
+    return OpenAI(base_url=cfg.openrouter_base_url, api_key=cfg.openrouter_api_key)
+
+
+def _is_openrouter(model: str) -> bool:
+    return model.startswith(_OPENROUTER_PREFIX)
+
+
+# Self-hosted vLLM on Modal (qwen/serve.py). The rest of the name is vLLM's
+# --served-model-name, e.g. `modal/qwen3.8-27b`.
+_MODAL_PREFIX = "modal/"
+
+# Qwen's chat template raises on any effort other than these three -- including
+# OpenAI's "high" -- so the env-enforced profile is translated, never passed through.
+_QWEN_REASONING_EFFORT = {"minimal": "low", "low": "low", "medium": "medium", "high": "xhigh"}
+
+
+@lru_cache
+def _modal_client():
+    from openai import OpenAI
+
+    cfg = get_settings()
+    if not (cfg.modal_llm_base_url and cfg.modal_llm_api_key):
+        raise RuntimeError(
+            "MODAL_LLM_BASE_URL and MODAL_LLM_API_KEY must both be set when a model "
+            "is routed to Modal (model name starts with 'modal/')"
+        )
+    return OpenAI(base_url=cfg.modal_llm_base_url, api_key=cfg.modal_llm_api_key)
+
+
+def _is_modal(model: str) -> bool:
+    return model.startswith(_MODAL_PREFIX)
+
 
 @lru_cache
 def _anthropic_client():
@@ -58,7 +103,47 @@ def complete_with_tools(
         input=messages,
         metadata={"environment": cfg.environment, "reasoning_effort": cfg.reasoning_effort},
     ) as gen:
-        if _is_anthropic(model):
+        if _is_openrouter(model):
+            out = openai_complete_with_tools(
+                client=_openrouter_client(),
+                # OpenRouter wants the bare `<vendor>/<name>`; the prefix is ours.
+                model=model.removeprefix(_OPENROUTER_PREFIX),
+                messages=messages,
+                tools=tools,
+                system=system,
+                max_tokens=cfg.max_output_tokens,
+                reasoning_effort=cfg.reasoning_effort,
+                schema=schema,
+                # OpenRouter silently DROPS params an upstream provider does not
+                # support. For a schema call that means unconstrained text coming
+                # back through `.parse` — a parse failure, not an error. This makes
+                # it route only to providers that honour json_schema, so the failure
+                # is a loud 404 the caller's fallback can act on.
+                extra_body={"provider": {"require_parameters": True}} if schema else None,
+            )
+        elif _is_modal(model):
+            out = openai_complete_with_tools(
+                client=_modal_client(),
+                model=model.removeprefix(_MODAL_PREFIX),
+                messages=messages,
+                tools=tools,
+                system=system,
+                # Counts thinking + answer; a truncated thinking phase leaves content
+                # empty, which complete_structured reports as None.
+                max_tokens=cfg.max_output_tokens,
+                # Top-level reasoning_effort is an OpenAI API field; Qwen takes it
+                # through the chat template instead.
+                reasoning_effort=None,
+                schema=schema,
+                extra_body={
+                    "chat_template_kwargs": {
+                        "reasoning_effort": _QWEN_REASONING_EFFORT[cfg.reasoning_effort]
+                    }
+                },
+                # Use the model's own sampling defaults (temp 1.0, top_p 0.95, top_k 20).
+                temperature=None,
+            )
+        elif _is_anthropic(model):
             out = anthropic_complete_with_tools(
                 client=_anthropic_client(),
                 model=model,

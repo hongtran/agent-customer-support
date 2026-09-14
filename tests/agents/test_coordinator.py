@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 from agent_customer_support.agents.coordinator import Coordinator
+from agent_customer_support.llm.schemas import ComposedAnswer
 from agent_customer_support.models import (
     AgentResult,
     CustomerProfile,
@@ -93,11 +94,11 @@ async def test_knowledge_clarify_roundtrip_no_escalate_then_resolves():
         ]
     )
 
-    def fake_complete_text(*args, **kwargs):
-        return next(compose_outputs)
+    def fake_compose(*args, **kwargs):
+        return ComposedAnswer(answer=next(compose_outputs), cited=[])
 
-    original_complete_text = knowledge_mod.complete_text
-    knowledge_mod.complete_text = fake_complete_text
+    original_complete_structured = knowledge_mod.complete_structured
+    knowledge_mod.complete_structured = fake_compose
     try:
         res1 = await c.handle_turn(
             customer_id="c1", conversation_id="cv1", message="tạo phiếu", attachments=[]
@@ -117,7 +118,7 @@ async def test_knowledge_clarify_roundtrip_no_escalate_then_resolves():
         saved2 = c.sessions.save.call_args.args[0]
         assert saved2.pending is None
     finally:
-        knowledge_mod.complete_text = original_complete_text
+        knowledge_mod.complete_structured = original_complete_structured
 
 
 async def test_root_trace_uses_conversation_as_session(monkeypatch):

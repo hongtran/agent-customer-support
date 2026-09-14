@@ -6,9 +6,35 @@ from agent_customer_support.agents.knowledge import (
 )
 from agent_customer_support.agents.context import TurnContext
 from agent_customer_support.config import get_settings
+from agent_customer_support.llm.schemas import CitedSource, ComposedAnswer
 from agent_customer_support.models import CustomerProfile, SessionState, Conversation
 
 pytestmark = pytest.mark.asyncio
+
+
+def _sources(*ids: str) -> list[CitedSource]:
+    """Citations by id with no section — the shape for a passage that offers no heading.
+
+    Tests about sections build CitedSource directly; everything else only cares that a
+    source was declared, so it should not have to say anything about headings.
+    """
+    return [CitedSource(id=i, section="") for i in ids]
+
+
+def _composed(answer: str, cited: list[str] | list[CitedSource] | None = None):
+    """Patch the compose call.
+
+    Compose is the only structured call KnowledgeAgent makes; contextualize still goes
+    through `complete_text`, so the two are patched separately and a test that cares
+    about only one of them no longer has to disambiguate by prompt content.
+
+    `cited` accepts bare ids for convenience, or CitedSource when the section matters.
+    """
+    sources = [CitedSource(id=c, section="") if isinstance(c, str) else c for c in cited or []]
+    return patch(
+        "agent_customer_support.agents.knowledge.complete_structured",
+        return_value=ComposedAnswer(answer=answer, cited=sources),
+    )
 
 
 def _ctx(message="cách tạo phiếu?") -> TurnContext:
@@ -94,9 +120,7 @@ def test_compose_prompt_documents_clarify_and_diagnose_policy():
 async def test_composes_answer_from_passages():
     ctx = _ctx()
     ctx.rag.search.return_value = {"passages": ["x" * 500], "citations": ["c#1"]}
-    with patch(
-        "agent_customer_support.agents.knowledge.complete_text", return_value="Vào menu X rồi tạo."
-    ):
+    with _composed("Vào menu X rồi tạo.", cited=["0"]):
         res = await KnowledgeAgent().run(ctx)
     assert res.resolved is True
     assert "menu X" in res.reply
@@ -107,9 +131,8 @@ async def test_always_composes_even_with_empty_passages():
     """Process is always-on, so a process-level question is answerable with no RAG hits."""
     ctx = _ctx("ai phụ trách bước nghiệm thu?")
     ctx.rag.search.return_value = {"passages": [], "citations": []}
-    with patch(
-        "agent_customer_support.agents.knowledge.complete_text",
-        return_value="Nghiệm thu hợp đồng do Kế toán và Kinh doanh phụ trách.",
+    with _composed(
+        "Nghiệm thu hợp đồng do Kế toán và Kinh doanh phụ trách.", cited=["quy_trinh_chung"]
     ) as mock_llm:
         res = await KnowledgeAgent().run(ctx)
     assert res.resolved is True
@@ -120,9 +143,7 @@ async def test_first_no_answer_clarifies_and_sets_pending():
     """First miss asks one clarifying question instead of logging/escalating."""
     ctx = _ctx("hỏi linh tinh")
     ctx.rag.search.return_value = {"passages": [], "citations": []}
-    with patch(
-        "agent_customer_support.agents.knowledge.complete_text", return_value="[[no_answer]]"
-    ):
+    with _composed("[[no_answer]]"):
         res = await KnowledgeAgent().run(ctx)
     assert res.resolved is None  # not escalated yet
     assert ctx.session.pending == "knowledge_clarify"
@@ -134,9 +155,7 @@ async def test_second_no_answer_logs_to_backlog():
     ctx = _ctx("hỏi linh tinh")
     ctx.session.pending = "knowledge_clarify"  # we already clarified once
     ctx.rag.search.return_value = {"passages": [], "citations": []}
-    with patch(
-        "agent_customer_support.agents.knowledge.complete_text", return_value="[[no_answer]]"
-    ):
+    with _composed("[[no_answer]]"):
         res = await KnowledgeAgent().run(ctx)
     assert res.resolved is False
     assert ctx.session.pending is None  # flag consumed
@@ -148,10 +167,7 @@ async def test_second_no_answer_logs_to_backlog():
 async def test_suspected_bug_marker_sets_flag():
     ctx = _ctx("tính năng A bị lỗi")
     ctx.rag.search.return_value = {"passages": ["p" * 500], "citations": []}
-    with patch(
-        "agent_customer_support.agents.knowledge.complete_text",
-        return_value="Đáng lẽ chạy. [[suspected_bug:xet-nghiem]]",
-    ):
+    with _composed("Đáng lẽ chạy. [[suspected_bug:xet-nghiem]]", cited=["0"]):
         res = await KnowledgeAgent().run(ctx)
     assert res.suspected_bug is True
     assert res.evidence["application"] == "xet-nghiem"
@@ -182,7 +198,7 @@ async def test_suspected_bug_marker_sets_flag():
 async def test_clarify_asks_once_and_sets_pending(message, clarify_reply):
     ctx = _ctx(message)
     ctx.rag.search.return_value = {"passages": [], "citations": ["c#1"]}
-    with patch("agent_customer_support.agents.knowledge.complete_text", return_value=clarify_reply):
+    with _composed(clarify_reply):
         res = await KnowledgeAgent().run(ctx)
     assert res.resolved is None  # neither answered nor escalated
     assert ctx.session.pending == "knowledge_clarify"
@@ -197,14 +213,16 @@ async def test_resume_turn_disables_clarify_and_grounds_answer():
     ctx.rag.search.return_value = {"passages": ["p" * 200], "citations": []}
     seen: dict = {}
 
-    def fake_complete(**kwargs):
-        content = kwargs["messages"][0]["content"]
-        if "Đoạn trích" in content:  # the compose call
-            seen["compose_content"] = content
-            return "Vì đơn còn trong ứng dụng, bạn trả về tài khoản đã tạo để sửa."
-        return kwargs["messages"][0]["content"]  # contextualize passthrough
+    def fake_compose(**kwargs):
+        seen["compose_content"] = kwargs["messages"][0]["content"]
+        return ComposedAnswer(
+            answer="Vì đơn còn trong ứng dụng, bạn trả về tài khoản đã tạo để sửa.",
+            cited=_sources("0"),
+        )
 
-    with patch("agent_customer_support.agents.knowledge.complete_text", side_effect=fake_complete):
+    with patch(
+        "agent_customer_support.agents.knowledge.complete_structured", side_effect=fake_compose
+    ):
         res = await KnowledgeAgent().run(ctx)
 
     from agent_customer_support.agents.prompts import KNOWLEDGE_RESUME_NO_CLARIFY
@@ -220,10 +238,7 @@ async def test_clarify_marker_on_resume_is_downgraded_to_answer():
     ctx = _ctx("vẫn chưa rõ")
     ctx.session.pending = "knowledge_clarify"
     ctx.rag.search.return_value = {"passages": [], "citations": []}
-    with patch(
-        "agent_customer_support.agents.knowledge.complete_text",
-        return_value="Giả định đơn còn trong ứng dụng: bạn sửa trực tiếp. [[clarify]]",
-    ):
+    with _composed("Giả định đơn còn trong ứng dụng: bạn sửa trực tiếp. [[clarify]]"):
         res = await KnowledgeAgent().run(ctx)
     assert res.resolved is True  # not a second clarify
     assert ctx.session.pending is None
@@ -272,17 +287,16 @@ async def test_run_uses_contextualized_query_for_search():
     standalone = "Cách xoá mẫu xét nghiệm trong CenLab?"
     call_log: list[str] = []
 
-    def fake_complete_text(**kwargs):
-        content = kwargs["messages"][0]["content"]
-        # _compose call — identified by the passages section it always includes
-        if "Đoạn trích" in content:
-            call_log.append(content)
-            return "Vào menu Mẫu XN, chọn mẫu rồi nhấn Xoá."
-        # _contextualize call
-        return standalone
+    def fake_compose(**kwargs):
+        call_log.append(kwargs["messages"][0]["content"])
+        return ComposedAnswer(answer="Vào menu Mẫu XN, chọn mẫu rồi nhấn Xoá.", cited=_sources("0"))
 
-    with patch(
-        "agent_customer_support.agents.knowledge.complete_text", side_effect=fake_complete_text
+    with (
+        patch("agent_customer_support.agents.knowledge.complete_text", return_value=standalone),
+        patch(
+            "agent_customer_support.agents.knowledge.complete_structured",
+            side_effect=fake_compose,
+        ),
     ):
         res = await KnowledgeAgent().run(ctx)
 
@@ -303,11 +317,13 @@ async def test_compose_includes_history_on_followup():
     )
     captured: dict = {}
 
-    def fake_complete(*, messages, system, model=None):
+    def fake_compose(*, messages, system, model=None, schema=None):
         captured["content"] = messages[0]["content"]
-        return "Chọn mẫu rồi nhấn Xoá."
+        return ComposedAnswer(answer="Chọn mẫu rồi nhấn Xoá.", cited=[])
 
-    with patch("agent_customer_support.agents.knowledge.complete_text", side_effect=fake_complete):
+    with patch(
+        "agent_customer_support.agents.knowledge.complete_structured", side_effect=fake_compose
+    ):
         await agent._compose(
             "Cách xoá mẫu xét nghiệm?", ["passage text"], transcript, get_settings()
         )
@@ -321,11 +337,13 @@ async def test_compose_omits_history_on_first_turn():
     agent = KnowledgeAgent()
     captured: dict = {}
 
-    def fake_complete(*, messages, system, model=None):
+    def fake_compose(*, messages, system, model=None, schema=None):
         captured["content"] = messages[0]["content"]
-        return "Vào menu X."
+        return ComposedAnswer(answer="Vào menu X.", cited=[])
 
-    with patch("agent_customer_support.agents.knowledge.complete_text", side_effect=fake_complete):
+    with patch(
+        "agent_customer_support.agents.knowledge.complete_structured", side_effect=fake_compose
+    ):
         await agent._compose(
             "cách tạo phiếu?", ["passage"], "user: cách tạo phiếu?", get_settings()
         )
@@ -339,11 +357,13 @@ async def test_compose_appends_no_clarify_directive_when_disabled():
     agent = KnowledgeAgent()
     captured: dict = {}
 
-    def fake_complete(*, messages, system, model=None):
+    def fake_compose(*, messages, system, model=None, schema=None):
         captured["content"] = messages[0]["content"]
-        return "ok"
+        return ComposedAnswer(answer="ok", cited=[])
 
-    with patch("agent_customer_support.agents.knowledge.complete_text", side_effect=fake_complete):
+    with patch(
+        "agent_customer_support.agents.knowledge.complete_structured", side_effect=fake_compose
+    ):
         await agent._compose("q", ["p"], "user: q", get_settings(), allow_clarify=False)
 
     assert KNOWLEDGE_RESUME_NO_CLARIFY in captured["content"]
@@ -355,11 +375,13 @@ async def test_compose_omits_no_clarify_directive_by_default():
     agent = KnowledgeAgent()
     captured: dict = {}
 
-    def fake_complete(*, messages, system, model=None):
+    def fake_compose(*, messages, system, model=None, schema=None):
         captured["content"] = messages[0]["content"]
-        return "ok"
+        return ComposedAnswer(answer="ok", cited=[])
 
-    with patch("agent_customer_support.agents.knowledge.complete_text", side_effect=fake_complete):
+    with patch(
+        "agent_customer_support.agents.knowledge.complete_structured", side_effect=fake_compose
+    ):
         await agent._compose("q", ["p"], "user: q", get_settings())
 
     assert KNOWLEDGE_RESUME_NO_CLARIFY not in captured["content"]
@@ -372,11 +394,13 @@ async def test_compose_passes_process_block_as_cached_system_prefix():
     agent = KnowledgeAgent()
     captured: dict = {}
 
-    def fake_complete(*, messages, system, model=None):
+    def fake_compose(*, messages, system, model=None, schema=None):
         captured["system"] = system
-        return "ok"
+        return ComposedAnswer(answer="ok", cited=[])
 
-    with patch("agent_customer_support.agents.knowledge.complete_text", side_effect=fake_complete):
+    with patch(
+        "agent_customer_support.agents.knowledge.complete_structured", side_effect=fake_compose
+    ):
         await agent._compose("q", ["p"], "user: q", get_settings())
 
     assert isinstance(captured["system"], list)
@@ -409,15 +433,18 @@ async def _run_capturing_compose(ctx, search_result):
     ctx.rag.search = AsyncMock(return_value={"passages": [], "citations": []})  # qa
     composed = []
 
-    def fake_complete_text(**kwargs):
-        content = kwargs["messages"][0]["content"]
-        if "Đoạn trích" in content:  # the compose call
-            composed.append(content)
-            return "Anh/Chị vui lòng vào menu Mẫu XN." + "x" * 200
-        return ctx.message
+    def fake_compose(**kwargs):
+        composed.append(kwargs["messages"][0]["content"])
+        return ComposedAnswer(
+            answer="Anh/Chị vui lòng vào menu Mẫu XN." + "x" * 200, cited=_sources("0")
+        )
 
-    with patch(
-        "agent_customer_support.agents.knowledge.complete_text", side_effect=fake_complete_text
+    with (
+        patch("agent_customer_support.agents.knowledge.complete_text", return_value=ctx.message),
+        patch(
+            "agent_customer_support.agents.knowledge.complete_structured",
+            side_effect=fake_compose,
+        ),
     ):
         res = await KnowledgeAgent().run(ctx)
     return res, composed[0]
@@ -514,7 +541,7 @@ async def test_no_scope_note_without_a_selection_to_contrast_against():
     """A widened retry is impossible with no selection (an empty scope is already
     global), but the note must not half-render if a caller ever gets there."""
     agent = KnowledgeAgent()
-    with patch("agent_customer_support.agents.knowledge.complete_text", return_value="ok") as llm:
+    with _composed("ok") as llm:
         await agent._compose(
             "q",
             ["p"],
@@ -524,3 +551,133 @@ async def test_no_scope_note_without_a_selection_to_contrast_against():
             selected_applications=None,
         )
     assert "LƯU Ý PHẠM VI" not in llm.call_args.kwargs["messages"][0]["content"]
+
+
+# ---- citations: what the answer declared, validated against what was retrieved ----
+
+
+async def _run_with_cited(cited, metas=None):
+    ctx = _ctx()
+    ctx.rag.search_with_fallback = AsyncMock(
+        return_value={
+            "passages": ["p0", "p1"],
+            "citations": ["ignored"],
+            "metas": metas
+            if metas is not None
+            else [
+                {"doc_id": "d1", "url": "chunks/9. HDSD - Lấy mẫu.docx", "confidence": 0.9},
+                {"doc_id": "d2", "url": "chunks/2. HDSD - Mua sắm.docx", "confidence": 0.8},
+            ],
+        }
+    )
+    ctx.rag.search = AsyncMock(return_value={"passages": [], "citations": [], "metas": []})
+    with _composed("Anh/Chị vui lòng vào menu X." + "y" * 200, cited=cited):
+        return await KnowledgeAgent().run(ctx)
+
+
+async def test_only_declared_sources_are_cited():
+    """Not everything retrieved. Two passages came back and the answer used one."""
+    res = await _run_with_cited(["1"])
+    assert [c.doc_id for c in res.citations] == ["d2"]
+    assert res.cited_passages == ["p1"]
+
+
+async def test_an_invented_index_never_reaches_the_result():
+    """The catalog is the guard, exactly as it is for image markers. A citation the
+    user cannot verify is worse than no citation at all."""
+    res = await _run_with_cited(["0", "9"])
+    assert [c.doc_id for c in res.citations] == ["d1"]
+
+
+async def test_a_process_only_answer_shows_no_source_at_all():
+    """The process block is our system prompt, not a document the customer can open, so
+    an answer resting only on it stays quiet rather than naming something unresolvable.
+    The declaration still happens — it just does not reach the reply."""
+    res = await _run_with_cited(["quy_trinh_chung"])
+    assert res.citations == []
+    # Empty cited_passages is also what makes the guardrail skip this turn: there is no
+    # passage to judge a process answer against.
+    assert res.cited_passages == []
+
+
+async def test_a_clarify_reply_cites_nothing_it_did_not_use():
+    ctx = _ctx()
+    ctx.rag.search.return_value = {"passages": ["p0"], "citations": ["c1"], "metas": []}
+    with _composed("Bạn muốn tạo loại phiếu nào? [[clarify]]", cited=[]):
+        res = await KnowledgeAgent().run(ctx)
+    assert res.citations == []
+    assert res.cited_passages == []
+
+
+async def test_a_miss_carries_no_citations():
+    """The reply on this path is our own canned text, not composed from any source."""
+    ctx = _ctx("hỏi linh tinh")
+    ctx.session.pending = "knowledge_clarify"
+    ctx.rag.search.return_value = {
+        "passages": ["p0"],
+        "citations": ["c1"],
+        "metas": [{"doc_id": "d1", "url": "x/9. HDSD.docx"}],
+    }
+    with _composed("[[no_answer]]", cited=["0"]):
+        res = await KnowledgeAgent().run(ctx)
+    assert res.resolved is False
+    assert res.citations == []
+
+
+async def test_structured_compose_failure_still_answers_uncited():
+    """Constrained decoding produced nothing usable. Retrieval and contextualize are
+    already paid for, so ship the answer without its source list rather than lose it."""
+    ctx = _ctx()
+    ctx.rag.search.return_value = {"passages": ["p0"], "citations": [], "metas": []}
+    with (
+        patch("agent_customer_support.agents.knowledge.complete_structured", return_value=None),
+        patch(
+            "agent_customer_support.agents.knowledge.complete_text",
+            return_value="Anh/Chị vui lòng vào menu X." + "y" * 200,
+        ) as fallback,
+    ):
+        res = await KnowledgeAgent().run(ctx)
+    assert res.resolved is True
+    assert "menu X" in res.reply
+    assert res.citations == []
+    fallback.assert_called_once()
+
+
+# ---- the compose prompt offers the headings the composer must choose from ----
+
+
+async def _compose_content(passages: list[str]) -> str:
+    """The user content of one compose call, for asserting on what the model was shown."""
+    captured: dict = {}
+
+    def fake_compose(*, messages, system, model=None, schema=None):
+        captured["content"] = messages[0]["content"]
+        return ComposedAnswer(answer="ok", cited=[])
+
+    with patch(
+        "agent_customer_support.agents.knowledge.complete_structured", side_effect=fake_compose
+    ):
+        await KnowledgeAgent()._compose("q", passages, "user: q", get_settings())
+    return captured["content"]
+
+
+async def test_the_compose_prompt_lists_each_passage_s_real_headings():
+    """Without this list the model reaches for whatever looks most like a title, which in
+    this corpus is the summary line prepended to every chunk — not a heading at all."""
+    passage = (
+        "Quản lý, nhập ký hiệu và gán phép thử cho mẫu trong PYC\n\n"
+        "Chunk này mô tả các thao tác quản lý mẫu.\n\n"
+        "##### Thao tác với mẫu đã tạo\n\n- Sửa mẫu.\n\n"
+        "##### **Import ký hiệu mẫu:**\n\n1. Mở chức năng Import."
+    )
+    content = await _compose_content([passage])
+    assert "(các mục trong đoạn này: Thao tác với mẫu đã tạo | Import ký hiệu mẫu)" in content
+    # The summary line is in the passage body but must not be offered as a choice.
+    assert "này: Quản lý, nhập ký hiệu" not in content
+
+
+async def test_a_passage_with_no_headings_gets_no_annotation():
+    """An empty `(các mục trong đoạn này: )` would invite the model to fill it in."""
+    content = await _compose_content(["| Vai trò | Không | Gán một hoặc nhiều vai trò. |"])
+    assert "các mục trong đoạn này" not in content
+    assert "[0]" in content  # still numbered as before
