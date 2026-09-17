@@ -17,7 +17,15 @@ type Draft = {
   password: string;
   role: Role;
   enabled_applications: string[];
+  daily_question_limit: number | null;
 };
+
+/** Empty input = unlimited (null); anything else is a non-negative whole number. */
+function parseLimit(v: string): number | null {
+  if (v.trim() === "") return null;
+  const n = Math.max(0, Math.floor(Number(v)));
+  return Number.isFinite(n) ? n : null;
+}
 
 const EMPTY_DRAFT: Draft = {
   customer_id: "",
@@ -25,6 +33,7 @@ const EMPTY_DRAFT: Draft = {
   password: "",
   role: "user",
   enabled_applications: [],
+  daily_question_limit: null,
 };
 
 function RoleBadge({ role }: { role: Role }) {
@@ -98,6 +107,7 @@ export default function CustomerAdmin() {
         password: draft.password,
         role: draft.role,
         enabled_applications: draft.enabled_applications,
+        daily_question_limit: draft.daily_question_limit,
       });
       setCreating(false);
       setDraft(EMPTY_DRAFT);
@@ -122,6 +132,8 @@ export default function CustomerAdmin() {
         name: sel.name,
         role: sel.role,
         enabled_applications: sel.enabled_applications,
+        // Always sent, null included: an explicit null is how "unlimited" is saved.
+        daily_question_limit: sel.daily_question_limit,
         // Only send a password when one was typed — an empty field must leave the
         // existing credentials alone, not wipe them.
         ...(newPassword ? { password: newPassword } : {}),
@@ -197,6 +209,11 @@ export default function CustomerAdmin() {
                   </div>
                   <p className="mt-1 text-sm text-gray-700">{c.name}</p>
                   <p className="font-mono text-xs text-gray-400">{c.customer_id}</p>
+                  {c.daily_question_limit !== null && c.role !== "admin" && (
+                    <p className="text-xs text-gray-500">
+                      Hôm nay: {c.questions_used_today}/{c.daily_question_limit} câu hỏi
+                    </p>
+                  )}
                 </button>
               </li>
             ))}
@@ -267,6 +284,20 @@ export default function CustomerAdmin() {
                 />
               </div>
 
+              <div>
+                <label className={labelCls}>Giới hạn câu hỏi/ngày</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={draft.daily_question_limit ?? ""}
+                  onChange={(e) =>
+                    setDraft({ ...draft, daily_question_limit: parseLimit(e.target.value) })
+                  }
+                  placeholder="Để trống = không giới hạn"
+                  className={inputCls}
+                />
+              </div>
+
               <div className="flex items-center gap-2 pt-2">
                 <button
                   onClick={onCreate}
@@ -330,6 +361,25 @@ export default function CustomerAdmin() {
                   onChange={(apps) => setSel({ ...sel, enabled_applications: apps })}
                   disabled={busy}
                 />
+              </div>
+
+              <div>
+                <label className={labelCls}>Giới hạn câu hỏi/ngày</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={sel.daily_question_limit ?? ""}
+                  onChange={(e) =>
+                    setSel({ ...sel, daily_question_limit: parseLimit(e.target.value) })
+                  }
+                  placeholder="Để trống = không giới hạn"
+                  className={inputCls}
+                />
+                <p className="mt-1 text-xs text-gray-400">
+                  {sel.role === "admin"
+                    ? "Tài khoản admin không bị giới hạn."
+                    : `Đã dùng hôm nay: ${sel.questions_used_today} câu hỏi. Đặt lại lúc 0h (giờ Việt Nam).`}
+                </p>
               </div>
 
               <div>

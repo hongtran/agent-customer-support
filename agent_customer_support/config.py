@@ -101,6 +101,12 @@ class Settings(BaseSettings):
     table_conversations: str = "acs_conversations"
     table_requests: str = "acs_requests"
     table_qa: str = "acs_qa"
+    table_usage: str = "acs_usage"
+
+    # per-customer daily question limit: "today" is counted in this timezone, and a
+    # day's counter item is expired by DynamoDB TTL this many days later
+    usage_timezone: str = "Asia/Ho_Chi_Minh"
+    usage_retention_days: int = 7
 
     # observability
     langfuse_public_key: str | None = None

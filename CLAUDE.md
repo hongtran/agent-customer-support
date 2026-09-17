@@ -124,6 +124,17 @@ no seed script by design.
 | `FlowStore` | DynamoDB | Flow definitions (seeded via `scripts/import_flows.py`) |
 | `RequestBacklog` | DynamoDB | Bug/feature/how-to records logged on escalation |
 | `AttachmentStore` | S3 | Uploaded screenshot bytes; the turn keeps only the key |
+| `UsageStore` | DynamoDB | Per-customer daily question counter (rate limit) |
+
+**Daily question limit.** `CustomerProfile.daily_question_limit` is N (`None` = unlimited;
+admins are never limited). `/widget/chat` calls `UsageStore.try_consume` after the 413 check
+and before the turn; a refusal is a 429. The count lives in its own table, one item per
+customer per day keyed `<customer_id>#<YYYY-MM-DD>` (day in `USAGE_TIMEZONE`, default
+`Asia/Ho_Chi_Minh`). **The date in the key is the reset** — there is no midnight job that
+could fail and leave customers blocked; old days expire via TTL on `expires_at`. It is not a
+field on the customer row because the admin PATCH rewrites that whole item from an earlier
+read and would roll the counter back. Check and increment are one conditional `UpdateItem`,
+so concurrent requests cannot both take the last slot. A turn that fails later is not refunded.
 
 **Attachments never carry bytes into DynamoDB.** A conversation is a single item that
 `ConversationStore.append` rewrites on every turn, and DynamoDB caps items at 400 KB —

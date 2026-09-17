@@ -15,7 +15,7 @@ import {
 } from "react";
 
 export interface Message {
-  role: "user" | "agent" | "error";
+  role: "user" | "agent" | "error" | "warning";
   content: string;
   messageId?: string;
   /** The sources this answer declared and the server could verify. See lib/api.ts. */
@@ -604,6 +604,17 @@ export default function MessageList({ messages, loading, onFeedbackDown }: Props
                     </div>
                   )}
                 </div>
+              </div>
+            </div>
+          );
+        }
+
+        if (msg.role === "warning") {
+          return (
+            <div key={i} className="flex justify-start">
+              <div className="flex max-w-[75%] items-start gap-2 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+                <span aria-hidden="true">⚠️</span>
+                <Markdown text={msg.content} />
               </div>
             </div>
           );

@@ -26,6 +26,15 @@ export function clearSession() {
 }
 
 /** Thrown on a 401 so callers can bounce to /login instead of showing a raw error. */
+/** The daily question limit is reached (HTTP 429). An expected state, not a failure,
+ *  so the chat shows it as a warning. `message` is the server's Vietnamese text. */
+export class RateLimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RateLimitError";
+  }
+}
+
 export class UnauthorizedError extends Error {
   constructor() {
     super("Session expired");
@@ -87,6 +96,8 @@ export interface Me {
   name: string;
   role: Role;
   enabled_applications: string[];
+  /** Questions left today; null = unlimited (no limit set, or an admin). */
+  questions_remaining: number | null;
 }
 
 export async function getMe(): Promise<Me> {
@@ -147,6 +158,8 @@ export interface ChatResult {
   attachments?: AttachmentRef[];
   /** The sources behind this reply, for the user to check the answer against. */
   citations?: Citation[];
+  /** Questions left today after this one; null = unlimited. */
+  questions_remaining?: number | null;
 }
 
 export async function sendMessage(payload: ChatPayload): Promise<ChatResult> {
@@ -155,6 +168,12 @@ export async function sendMessage(payload: ChatPayload): Promise<ChatResult> {
     body: JSON.stringify(payload),
   });
 
+  // 429 = daily question limit reached; the server's detail is already a Vietnamese
+  // sentence meant for the user, so show it as-is.
+  if (res.status === 429) {
+    const body = await res.json().catch(() => null);
+    throw new RateLimitError(body?.detail ?? "Bạn đã hết lượt hỏi hôm nay.");
+  }
   if (!res.ok) {
     throw new Error(`Server error ${res.status}: ${await res.text()}`);
   }
@@ -165,6 +184,7 @@ export async function sendMessage(payload: ChatPayload): Promise<ChatResult> {
     message_id: data.message_id,
     attachments: data.attachments,
     citations: data.citations,
+    questions_remaining: data.questions_remaining ?? null,
   };
 }
 
@@ -239,6 +259,9 @@ export interface Customer {
   enabled_applications: string[];
   config_notes: string | null;
   has_password: boolean;
+  /** Questions per day; null = unlimited. Admins are never limited. */
+  daily_question_limit: number | null;
+  questions_used_today: number;
 }
 
 export interface CustomerCreate {
@@ -248,6 +271,7 @@ export interface CustomerCreate {
   role?: Role;
   enabled_applications?: string[];
   config_notes?: string | null;
+  daily_question_limit?: number | null;
 }
 
 export type CustomerPatch = Partial<Omit<CustomerCreate, "customer_id">>;

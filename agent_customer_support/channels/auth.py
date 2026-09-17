@@ -2,10 +2,15 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from agent_customer_support.auth import create_access_token, verify_password
-from agent_customer_support.channels.deps import get_current_customer, get_customer_registry
+from agent_customer_support.channels.deps import (
+    get_current_customer,
+    get_customer_registry,
+    get_usage_store,
+)
 from agent_customer_support.config import get_settings
 from agent_customer_support.models import CustomerProfile, Role
 from agent_customer_support.stores.customer_registry import CustomerRegistry
+from agent_customer_support.stores.usage_store import UsageStore
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -30,6 +35,9 @@ class MeResponse(BaseModel):
     name: str
     role: Role
     enabled_applications: list[str]
+    # Questions left today; None = unlimited. Loaded here so the widget header has the
+    # number on page load, before the first question returns a fresh one.
+    questions_remaining: int | None = None
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -55,10 +63,14 @@ async def login(
 
 
 @router.get("/me", response_model=MeResponse)
-async def me(customer: CustomerProfile = Depends(get_current_customer)) -> MeResponse:
+async def me(
+    customer: CustomerProfile = Depends(get_current_customer),
+    usage: UsageStore = Depends(get_usage_store),
+) -> MeResponse:
     return MeResponse(
         customer_id=customer.customer_id,
         name=customer.name,
         role=customer.role,
         enabled_applications=customer.enabled_applications,
+        questions_remaining=await usage.remaining_today(customer),
     )

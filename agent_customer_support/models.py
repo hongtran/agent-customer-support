@@ -63,6 +63,10 @@ class CustomerProfile(BaseModel):
     # before authentication existed looks like.
     password_hash: str | None = None
     role: Role = "user"
+    # Questions per day (Vietnam time). None = unlimited, which is what every row created
+    # before rate limiting existed looks like. Admins are never limited. The running count
+    # lives in UsageStore, not here — see there for why.
+    daily_question_limit: int | None = Field(default=None, ge=0)
 
 
 # ---- Attachments ----
@@ -244,6 +248,8 @@ class ChatResponse(BaseModel):
     # The *user* turn's images, echoed back with presigned URLs so the widget can
     # render what was just uploaded. Same shape a history endpoint would return.
     attachments: list[AttachmentRef] = Field(default_factory=list)
+    # Questions left today after this one; None = no daily limit (or an admin).
+    questions_remaining: int | None = None
 
 
 # ---- Agent contract ----

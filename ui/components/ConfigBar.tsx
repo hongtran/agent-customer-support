@@ -9,6 +9,8 @@ interface Props {
   me: Me;
   conversationId: string;
   selectedApplications: string[];
+  /** Questions left today; null = unlimited, and the counter is hidden. */
+  questionsRemaining: number | null;
   onConversationIdChange: (v: string) => void;
   onApplicationsChange: (applications: string[]) => void;
   onNewConversation: () => void;
@@ -32,6 +34,7 @@ export default function ConfigBar({
   me,
   conversationId,
   selectedApplications,
+  questionsRemaining,
   onConversationIdChange,
   onApplicationsChange,
   onNewConversation,
@@ -40,7 +43,12 @@ export default function ConfigBar({
   // The customer used to be a free-text input; it now comes from the token, so the
   // available applications come straight off the session with no extra fetch.
   const availableApplications = me.enabled_applications;
-  const mustChoose = needsApplicationChoice(availableApplications, selectedApplications);
+  // At 0 there is no next question to scope, so the application picker is locked
+  // together with the composer. The amber "must choose" hint is suppressed too — it
+  // would ask for a choice the user cannot make.
+  const limitReached = questionsRemaining === 0;
+  const mustChoose =
+    !limitReached && needsApplicationChoice(availableApplications, selectedApplications);
 
   useEffect(() => {
     // Drop any selection that isn't offered to this customer.
@@ -79,6 +87,17 @@ export default function ConfigBar({
           />
         </label>
         <div className="ml-auto flex items-center gap-2">
+          {questionsRemaining !== null && (
+            <span
+              className={`rounded-full border px-2.5 py-0.5 text-xs font-medium ${
+                limitReached
+                  ? "border-amber-300 bg-amber-50 text-amber-800"
+                  : "border-gray-300 bg-white text-gray-600"
+              }`}
+            >
+              Còn {questionsRemaining} câu hỏi hôm nay
+            </span>
+          )}
           {me.role === "admin" && (
             <Link
               href="/admin"
@@ -114,8 +133,9 @@ export default function ConfigBar({
               <button
                 key={app}
                 onClick={() => toggleApplication(app)}
+                disabled={limitReached}
                 aria-pressed={checked}
-                className={`rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors ${
+                className={`rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
                   checked
                     ? "border-blue-500 bg-blue-100 text-blue-700"
                     : mustChoose
@@ -134,7 +154,8 @@ export default function ConfigBar({
             (selectedApplications.length === availableApplications.length ? (
               <button
                 onClick={() => onApplicationsChange([])}
-                className="text-xs text-gray-400 hover:text-gray-600"
+                disabled={limitReached}
+                className="text-xs text-gray-400 hover:text-gray-600 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Bỏ chọn tất cả
               </button>
@@ -144,7 +165,8 @@ export default function ConfigBar({
               // Without it, the gate would only ever narrow retrieval versus today.
               <button
                 onClick={() => onApplicationsChange(availableApplications)}
-                className="text-xs text-blue-600 hover:text-blue-700"
+                disabled={limitReached}
+                className="text-xs text-blue-600 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Tất cả ứng dụng của tôi
               </button>

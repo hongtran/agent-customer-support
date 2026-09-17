@@ -96,6 +96,7 @@ def test_me_returns_the_token_owner(client):
         "name": "TTP",
         "role": "user",
         "enabled_applications": ["Lấy mẫu - Quan trắc"],
+        "questions_remaining": None,  # no daily limit set
     }
 
 

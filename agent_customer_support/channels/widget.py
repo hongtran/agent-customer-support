@@ -15,10 +15,12 @@ from agent_customer_support.channels.deps import (
     get_conversation_store,
     get_current_customer,
     get_qa_store,
+    get_usage_store,
 )
 from agent_customer_support.config import get_settings
 from agent_customer_support.stores.conversation_store import ConversationStore
 from agent_customer_support.stores.qa_store import QAStore
+from agent_customer_support.stores.usage_store import UsageStore
 
 router = APIRouter(prefix="/widget", tags=["widget"])
 
@@ -33,6 +35,7 @@ async def chat(
     req: ChatRequest,
     agent: Coordinator = Depends(get_agent),
     customer: CustomerProfile = Depends(get_current_customer),
+    usage: UsageStore = Depends(get_usage_store),
 ) -> ChatResponse:
     # Size-check before anything else: an oversized upload should cost nothing, and
     # everything downstream (S3, the LLM) is more expensive than this comparison.
@@ -45,7 +48,20 @@ async def chat(
             status_code=413,
             detail=f"attachments total {total} bytes, limit is {limit}",
         )
-    return await agent.handle_turn(
+    # Daily question limit. After the size check, so a rejected upload does not use a
+    # slot; before the turn, so a refused question costs no LLM call. A turn that fails
+    # later still uses its slot — no refund, which also caps a client retrying in a loop.
+    daily_limit = customer.daily_question_limit
+    remaining: int | None = None
+    if customer.role != "admin" and daily_limit is not None:
+        used = await usage.try_consume(customer.customer_id, daily_limit)
+        if used is None:
+            raise HTTPException(
+                status_code=429,
+                detail="Bạn đã hết lượt hỏi hôm nay. Vui lòng quay lại vào ngày mai.",
+            )
+        remaining = max(0, daily_limit - used)
+    response = await agent.handle_turn(
         # From the token, never the body — this is what makes the tenant boundary real.
         customer_id=customer.customer_id,
         conversation_id=req.conversation_id,
@@ -53,6 +69,8 @@ async def chat(
         attachments=req.attachments,
         applications=req.applications or None,
     )
+    response.questions_remaining = remaining
+    return response
 
 
 class CustomerApplicationsResponse(BaseModel):
