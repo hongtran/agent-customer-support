@@ -271,7 +271,7 @@ async def test_minor_claims_are_deleted_in_python_without_a_second_judge_call():
 
 
 async def test_a_span_python_cannot_delete_goes_to_the_llm_repair_and_is_judged_again():
-    # Ends with a full stop: a whole sentence, which strip_claims refuses.
+    # Ends with a full stop: a whole sentence, which apply_claims refuses.
     c = _flagged_coord([{"span": "để lập phiếu.", "severity": "minor", "reason": "thừa"}])
     c.knowledge.repair = AsyncMock(return_value="Anh/Chị vào menu Phiếu yêu cầu rồi nhấn Tạo mới.")
     c.guardrail.check_output = AsyncMock(
@@ -339,4 +339,21 @@ async def test_a_failure_with_no_named_claims_escalates():
     c = _flagged_coord([])
     res = await _turn(c)
     assert res.escalated is True
+    c.knowledge.repair.assert_not_awaited()
+
+
+async def test_a_minor_claim_with_a_replacement_is_applied_in_python():
+    c = _flagged_coord(
+        [
+            {
+                "span": "Đang sử dụng, Anh/Chị",
+                "replacement": "Anh/Chị",
+                "severity": "minor",
+                "reason": "thừa",
+            }
+        ]
+    )
+    res = await _turn(c)
+    assert res.reply == "Anh/Chị vào menu Phiếu yêu cầu rồi nhấn Tạo mới để lập phiếu."
+    assert res.escalated is False
     c.knowledge.repair.assert_not_awaited()

@@ -262,17 +262,23 @@ judging them would flag correct replies while spending a call on every turn. It 
 fails OPEN.
 
 **A failed verdict names each claim, and severity picks the repair.** The judge returns
-`unsupported_claims` as `{span, severity, reason}` (`GroundingVerdict` in
-`llm/schemas.py`): `span` is a verbatim substring of the reply, kept to the smallest
-phrase, and `severity` is `minor` (extra but harmless, changes nothing the user does) or
-`critical` (wrong or invented step, button, number, condition). `Coordinator._repair_or_escalate`
-then climbs a ladder, cheapest rung first:
+`unsupported_claims` as `{span, replacement, severity, reason}` (`GroundingVerdict` in
+`llm/schemas.py`): `span` is a verbatim substring of the reply, `replacement` is what it
+should become so the sentence stays grammatical (empty = delete), and `severity` is
+`minor` (extra but harmless, changes nothing the user does) or `critical` (wrong or
+invented step, button, number, condition). `Coordinator._repair_or_escalate` then climbs
+a ladder, cheapest rung first:
 
-1. **Python delete** — every claim is minor and `guardrail.strip_claims` can remove each
-   span safely: found exactly once, short (80 chars / 12 words), not a whole sentence, not
-   inside an image marker, and the reply keeps some prose. All-or-nothing. The result is
-   **not re-judged**: Python removed exactly the text the judge named, so a second call
-   would only confirm the judge's own list.
+1. **Python edit** — every claim is minor and `guardrail.apply_claims` can apply each
+   replacement safely. **The replacement may only reuse the span's own words, in order**:
+   `_safe_edit` checks that its words are a strict subsequence of the span's words
+   (punctuation and case may change), so the judge can trim a sentence but never write a
+   new claim into it. At most 12 words may be removed per claim; a pure delete is further
+   held to a phrase (80 chars, not ending in `.!?`) because deleting a sentence can drop
+   a step, where a replacement keeps it alive. Each span must be found exactly once,
+   markers must survive, and the reply must keep some prose. All-or-nothing. The result
+   is **not re-judged**: Python applied exactly the edit the judge named, so a second
+   call would only confirm the judge's own list.
 2. **LLM repair** — every claim is minor but Python refused. One `KnowledgeAgent.repair`
    call (`llm.knowledge.repair`) with the same cited passages and the instruction "Xóa hoặc
    sửa các ý sau cho khớp với nguồn. Không thêm ý mới."; an image marker the original did

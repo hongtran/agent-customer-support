@@ -50,7 +50,7 @@ from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
-from agent_customer_support.agents.guardrail import GuardrailAgent, only_minor, strip_claims
+from agent_customer_support.agents.guardrail import GuardrailAgent, only_minor, apply_claims
 from agent_customer_support.agents.knowledge import KnowledgeAgent
 from agent_customer_support.agents.prompts import PROCESS_BLOCK
 from agent_customer_support.config import get_settings
@@ -188,10 +188,15 @@ def _sources_block(passages: list[str]) -> str:
 
 
 def format_claims(claims: list[dict]) -> str:
-    """One string per verdict for the CSV: `severity: "span" (reason)`, joined with ` | `."""
-    return " | ".join(
-        f'{c.get("severity", "")}: "{c.get("span", "")}" ({c.get("reason", "")})' for c in claims
-    )
+    """One string per verdict for the CSV: `severity: "span" => "replacement" (reason)`,
+    joined with ` | `; the `=>` part only when the judge offered a replacement."""
+    out = []
+    for c in claims:
+        item = f'{c.get("severity", "")}: "{c.get("span", "")}"'
+        if c.get("replacement"):
+            item += f' => "{c["replacement"]}"'
+        out.append(f'{item} ({c.get("reason", "")})')
+    return " | ".join(out)
 
 
 REPAIR_PATHS = ("python", "llm", "escalate")
@@ -204,7 +209,7 @@ def repair_path(verdict: dict, answer: str) -> str:
     column costs nothing and cannot drift from the real decision:
 
       ""        the guardrail passed; nothing to repair
-      python    every claim is minor and `strip_claims` deletes them safely
+      python    every claim is minor and `apply_claims` deletes them safely
       llm       every claim is minor but Python refused -- the repair call would run
       escalate  a critical claim, or no named claim at all
 
@@ -216,7 +221,7 @@ def repair_path(verdict: dict, answer: str) -> str:
     claims = verdict.get("unsupported_claims") or []
     if not only_minor(claims):
         return "escalate"
-    return "python" if strip_claims(answer, claims) is not None else "llm"
+    return "python" if apply_claims(answer, claims) is not None else "llm"
 
 
 _NO_REPAIR = {
@@ -254,7 +259,7 @@ async def repair_outcome(
     started = time.perf_counter()
     with usage.collect() as u:
         if path == "python":
-            repaired = strip_claims(answer, claims)
+            repaired = apply_claims(answer, claims)
         elif path == "llm":
             repaired = await KnowledgeAgent().repair(answer, claims, cited_passages)
         else:

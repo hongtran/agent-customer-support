@@ -142,19 +142,30 @@ def test_label_matrix_counts_pass_and_escalate_per_label():
 # --- guardrail verdict columns ----------------------------------------------------
 
 
-def _minor(span: str, reason: str = "thừa") -> dict:
-    return {"span": span, "severity": "minor", "reason": reason}
+def _minor(span: str, reason: str = "thừa", replacement: str = "") -> dict:
+    return {"span": span, "replacement": replacement, "severity": "minor", "reason": reason}
 
 
-def test_format_claims_renders_severity_span_and_reason_per_claim():
+def test_format_claims_renders_severity_span_replacement_and_reason_per_claim():
     claims = [
         _minor("Đang sử dụng, ", "không có trong nguồn"),
-        {"span": "nút Xuất Excel", "severity": "critical", "reason": "bịa nút"},
+        {"span": "nút Xuất Excel", "replacement": "", "severity": "critical", "reason": "bịa nút"},
+        _minor("Lưu ở góc phải,", "vị trí", replacement="Lưu,"),
     ]
     assert ge.format_claims(claims) == (
         'minor: "Đang sử dụng, " (không có trong nguồn) | critical: "nút Xuất Excel" (bịa nút)'
+        ' | minor: "Lưu ở góc phải," => "Lưu," (vị trí)'
     )
     assert ge.format_claims([]) == ""
+
+
+def test_repair_path_is_python_when_a_replacement_applies():
+    verdict = {
+        "pass": False,
+        "reason": "x",
+        "unsupported_claims": [_minor("Đang sử dụng, Anh/Chị", replacement="Anh/Chị")],
+    }
+    assert ge.repair_path(verdict, _ANSWER) == "python"
 
 
 _ANSWER = "Đang sử dụng, Anh/Chị vào menu Phiếu yêu cầu rồi nhấn Tạo mới để lập phiếu."
@@ -164,13 +175,13 @@ def test_repair_path_is_empty_when_the_guardrail_passed():
     assert ge.repair_path({"pass": True, "reason": ""}, _ANSWER) == ""
 
 
-def test_repair_path_is_python_when_strip_claims_would_succeed():
+def test_repair_path_is_python_when_apply_claims_would_succeed():
     verdict = {"pass": False, "reason": "x", "unsupported_claims": [_minor("Đang sử dụng, ")]}
     assert ge.repair_path(verdict, _ANSWER) == "python"
 
 
 def test_repair_path_is_llm_when_only_minor_but_python_refuses():
-    # A whole sentence: strip_claims refuses, so the LLM repair would run.
+    # A whole sentence: apply_claims refuses, so the LLM repair would run.
     verdict = {"pass": False, "reason": "x", "unsupported_claims": [_minor("để lập phiếu.")]}
     assert ge.repair_path(verdict, _ANSWER) == "llm"
 

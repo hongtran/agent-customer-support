@@ -243,7 +243,7 @@ class KnowledgeAgent:
         """Rewrite `reply` so the flagged minor claims match the sources it cited.
 
         The second rung of the coordinator's repair ladder: the guardrail found only
-        MINOR unsupported claims, and `guardrail.strip_claims` refused to delete them in
+        MINOR unsupported claims, and `guardrail.apply_claims` refused to delete them in
         Python (a whole sentence, or a span it could not find exactly once). One call,
         no retry loop here -- the coordinator judges the result once more and escalates
         if it still fails.
@@ -257,7 +257,15 @@ class KnowledgeAgent:
 
         Returns None when the model produced nothing, so the caller can escalate.
         """
-        claims_block = "\n".join(f'- "{c.get("span", "")}": {c.get("reason", "")}' for c in claims)
+        # The judge's own replacement rides along as a hint: apply_claims refused it
+        # (too much removed, or a span not found exactly once), it was not judged wrong.
+        lines = []
+        for c in claims:
+            line = f'- "{c.get("span", "")}": {c.get("reason", "")}'
+            if c.get("replacement"):
+                line += f' (gợi ý sửa: "{c["replacement"]}")'
+            lines.append(line)
+        claims_block = "\n".join(lines)
         content = (
             f"NGUỒN ĐÃ DẪN:\n{_passages_block(cited_passages)}"
             f"\n\nCÂU TRẢ LỜI:\n{reply}"

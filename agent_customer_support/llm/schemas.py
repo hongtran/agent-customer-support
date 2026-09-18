@@ -99,10 +99,15 @@ class UnsupportedClaim(BaseModel):
     """One claim in a reply that no cited source supports.
 
     `span` is a VERBATIM substring of the reply, kept to the smallest phrase that carries
-    the unsupported idea. That precision is not cosmetic: `guardrail.strip_claims` deletes
+    the unsupported idea. That precision is not cosmetic: `guardrail.apply_claims` edits
     the span in Python when every claim is minor, and it can only do that if the text is
-    findable exactly once. A paraphrase or a whole sentence sends the reply to the LLM
-    repair path instead.
+    findable exactly once. A paraphrase sends the reply to the LLM repair path instead.
+
+    `replacement` is what the span becomes -- empty to delete it outright, otherwise the
+    span with the unsupported words taken out, so the sentence stays grammatical. It may
+    only REUSE the span's own words in their original order (punctuation and case may
+    change); `apply_claims` enforces that with a subsequence check, because a judge that
+    could write free text here would be a second composer with no grounding check.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -113,10 +118,17 @@ class UnsupportedClaim(BaseModel):
             "ngắn nhất có thể — chỉ cụm từ chứa ý thiếu căn cứ, không phải cả câu."
         )
     )
-    severity: Literal["minor", "critical"] = Field(
+    replacement: str = Field(
+        description=(
+            "Phần THAY THẾ cho span để câu còn lại đúng ngữ pháp: chỉ được dùng lại các từ "
+            "có trong span theo đúng thứ tự (bỏ bớt từ, sửa dấu câu/viết hoa), TUYỆT ĐỐI "
+            "không thêm từ mới. Để rỗng nếu xóa hẳn span."
+        )
+    )
+    severity: Literal["minor"] = Field(
         description=(
             "minor: chi tiết thừa không có trong nguồn nhưng không sai và không làm người "
-            "dùng thao tác khác đi (mẹo chung, ngữ cảnh vô hại). critical: bịa thông tin, không thể suy ra từ nguồn hoặc quy trình"
+            "dùng thao tác khác đi (mẹo chung, ngữ cảnh vô hại)."
         )
     )
     reason: str = Field(description="lý do ngắn, tiếng Việt")

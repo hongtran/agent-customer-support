@@ -745,3 +745,18 @@ async def test_repair_is_labelled_as_its_own_llm_step():
         with tracing.agent_span("knowledge"):
             await KnowledgeAgent().repair("Nhấn Lưu ở góc phải.", _CLAIMS, ["p"])
     assert seen["labels"] == ("knowledge", "repair")
+
+
+async def test_repair_passes_the_judge_replacement_as_a_hint():
+    captured: dict = {}
+
+    def fake_text(*, messages, system, model=None):
+        captured["content"] = messages[0]["content"]
+        return "ok đã sửa"
+
+    claims = [
+        {"span": "Lưu ở góc phải,", "replacement": "Lưu,", "severity": "minor", "reason": "vị trí"}
+    ]
+    with patch("agent_customer_support.agents.knowledge.complete_text", side_effect=fake_text):
+        await KnowledgeAgent().repair("Nhấn Lưu ở góc phải, rồi thoát.", claims, ["p"])
+    assert '"Lưu ở góc phải,": vị trí (gợi ý sửa: "Lưu,")' in captured["content"]

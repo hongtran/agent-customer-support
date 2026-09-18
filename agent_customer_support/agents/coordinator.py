@@ -4,7 +4,7 @@ from agent_customer_support import doc_images
 from agent_customer_support.agents.context import TurnContext
 from agent_customer_support.agents.escalation import EscalationAgent
 from agent_customer_support.agents.flow import FlowAgent
-from agent_customer_support.agents.guardrail import GuardrailAgent, only_minor, strip_claims
+from agent_customer_support.agents.guardrail import GuardrailAgent, only_minor, apply_claims
 from agent_customer_support.agents.knowledge import KnowledgeAgent
 from agent_customer_support.agents.prompts import OUT_OF_SCOPE_REPLY
 from agent_customer_support.agents.triage import TriageAgent
@@ -121,13 +121,13 @@ class Coordinator:
             # something. `cited_passages` is empty for every other route (flow,
             # escalation, out_of_scope) and for knowledge replies that cited nothing, so
             # check_output short-circuits there without an LLM call.
-            # gout = await self.guardrail.check_output(result.reply, result.cited_passages)
-            # repaired: str | None = None
-            # if not gout["pass"]:
-            #     result, repaired = await self._repair_or_escalate(ctx, result, gout)
+            gout = await self.guardrail.check_output(result.reply, result.cited_passages)
+            repaired: str | None = None
+            if not gout["pass"]:
+                result, repaired = await self._repair_or_escalate(ctx, result, gout)
             resp = await self._finish(ctx, result, session)
             turn.update(
-                output={"reply": resp.reply, "escalated": resp.escalated}
+                output={"reply": resp.reply, "escalated": resp.escalated, "repaired": repaired}
             )
             return resp
 
@@ -137,7 +137,7 @@ class Coordinator:
         """Rescue a flagged reply when the judge found only minor problems; else hand off.
 
         Three rungs, cheapest first, and the second tag says which one rescued it:
-          1. "python"  — every claim is minor and `strip_claims` can delete each span
+          1. "python"  — every claim is minor and `apply_claims` can delete each span
              safely. No further judge call: Python removed exactly the text the judge
              named, so re-judging would spend a call to confirm the judge's own list.
           2. "llm"     — every claim is minor but a span was not safely deletable (a
@@ -152,7 +152,7 @@ class Coordinator:
         """
         claims = gout.get("unsupported_claims") or []
         if only_minor(claims):
-            stripped = strip_claims(result.reply, claims)
+            stripped = apply_claims(result.reply, claims)
             if stripped is not None:
                 logger.info("ungrounded reply repaired in python: %s", gout.get("reason"))
                 result.reply = stripped

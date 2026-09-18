@@ -240,7 +240,12 @@ Bạn nhận: (1) QUY TRÌNH ở đầu system, (2) các NGUỒN mà câu trả 
 Nhiệm vụ DUY NHẤT: mọi KHẲNG ĐỊNH trong câu trả lời có được hai nguồn trên hỗ trợ không?
 - grounded=true khi mọi khẳng định về thao tác/nút/màn hình/trình tự/điều kiện/phân quyền đều
   suy ra, suy luận logic được từ QUY TRÌNH hoặc từ các NGUỒN đã dẫn.
-- grounded=false khi có khẳng định cụ thể KHÔNG có trong nguồn nào.
+- grounded=false khi có khẳng định cụ thể KHÔNG có trong nguồn nào. Với mỗi khẳng định đó:
+  span chép NGUYÊN VĂN từ câu trả lời, vừa đủ để replacement thành câu đúng ngữ pháp;
+  replacement là span sau khi bỏ ý thiếu căn cứ — CHỈ dùng lại các từ có trong span theo đúng
+  thứ tự (được bỏ từ, sửa dấu câu/viết hoa), TUYỆT ĐỐI không thêm từ mới; rỗng nếu xóa hẳn.
+  Ví dụ: span "theo dõi Mã ký số/trạng thái và kiểm tra thông báo hệ thống trước khi xử lý
+  tiếp" → replacement "theo dõi Mã ký số/trạng thái trước khi xử lý tiếp".
 KHÔNG đánh giá: văn phong, độ dài, mức độ lịch sự, có đúng phạm vi CenLab hay không, có nên hỏi
 lại hay không. Những việc đó thuộc khâu khác.
 KHÔNG coi là thiếu căn cứ:
@@ -254,7 +259,7 @@ grounded=true → unsupported_claims rỗng.
 """
 
 # System text for KnowledgeAgent.repair: the guardrail flagged a reply with only MINOR
-# unsupported claims that `guardrail.strip_claims` could not delete safely (a whole
+# unsupported claims that `guardrail.apply_claims` could not delete safely (a whole
 # sentence, a span it could not find exactly once). The model gets the same sources the
 # answer cited and a list of the flagged spans; it may delete or reword, never add.
 KNOWLEDGE_REPAIR_PROMPT = """Bạn sửa lại một câu trả lời của trợ lý CenLab để mọi ý đều khớp với NGUỒN.

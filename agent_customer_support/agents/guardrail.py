@@ -8,14 +8,17 @@ from agent_customer_support.llm.schemas import GroundingVerdict
 
 MAX_INPUT_CHARS = 5000
 
-# Limits for the Python delete in `strip_claims`. A span past any of these is a sentence
-# or more, and deleting a sentence can silently drop a step the user needed -- that is
-# the LLM repair's job, which can reword instead of cut.
-_MAX_SPAN_CHARS = 80
-_MAX_SPAN_WORDS = 12
-# Below this many characters of prose the deletion took the answer with it.
+# Limits for the Python edit in `apply_claims`. At most this many words may be REMOVED
+# by one claim: past that the judge is rewriting, not trimming, and a rewrite is the
+# LLM repair's job. A pure delete (empty replacement) is held to two more guards --
+# not a whole sentence, not longer than a phrase -- because deleting a sentence can
+# silently drop a step the user needed, where a replacement keeps the sentence alive.
+_MAX_REMOVED_WORDS = 12
+_MAX_DELETE_CHARS = 80
+# Below this many characters of prose the edit took the answer with it.
 _MIN_REPLY_CHARS = 20
 _SENTENCE_END = (".", "!", "?")
+_TOKEN_PUNCT = ".,;:!?()[]\"'“”‘’…"
 
 
 def _sources_block(passages: list[str]) -> str:
@@ -31,22 +34,55 @@ def only_minor(claims: list[dict]) -> bool:
     return bool(claims) and all(c.get("severity") == "minor" for c in claims)
 
 
+def _words(text: str) -> list[str]:
+    """Bare words for the subsequence check: punctuation and case are grammar, which a
+    replacement is allowed to fix; the words themselves are content, which it is not."""
+    out = []
+    for tok in text.split():
+        core = tok.strip(_TOKEN_PUNCT).casefold()
+        if core:
+            out.append(core)
+    return out
+
+
+def _is_subsequence(short: list[str], long: list[str]) -> bool:
+    it = iter(long)
+    return all(any(w == x for x in it) for w in short)
+
+
+def _safe_edit(span: str, replacement: str) -> bool:
+    """Whether replacing `span` with `replacement` removes content without adding any.
+
+    The replacement's words must be a subsequence of the span's words -- same words, same
+    order, some left out -- and at least one word must actually go. That is the whole
+    guard against the judge becoming a second composer: it can trim and re-punctuate,
+    never introduce a step, a button or a condition the answer did not already contain.
+    """
+    span_words, repl_words = _words(span), _words(replacement)
+    if len(repl_words) >= len(span_words):
+        return False
+    if not _is_subsequence(repl_words, span_words):
+        return False
+    return len(span_words) - len(repl_words) <= _MAX_REMOVED_WORDS
+
+
 def _tidy(text: str) -> str:
-    """Whitespace left behind by a deletion: doubled spaces, a space before punctuation,
+    """Whitespace left behind by an edit: doubled spaces, a space before punctuation,
     trailing spaces at line ends. Nothing else -- this is not a rewrite."""
     text = re.sub(r"[ \t]{2,}", " ", text)
     text = re.sub(r" +([,.;:!?])", r"\1", text)
     return "\n".join(line.rstrip() for line in text.split("\n")).strip()
 
 
-def strip_claims(reply: str, claims: list[dict]) -> str | None:
-    """Delete every minor span from `reply`, or return None if that is not safe.
+def apply_claims(reply: str, claims: list[dict]) -> str | None:
+    """Apply every minor claim's replacement to `reply`, or return None if not safe.
 
     All-or-nothing: a half-repaired reply would ship text the judge flagged with no
-    record that it was flagged. Each span must be minor, findable EXACTLY once in the
-    text as it stands after the earlier deletions (so overlapping spans fail as "not
-    found" rather than being skipped), short enough to be a phrase rather than a
-    sentence, and outside every image marker. The result must still hold some prose.
+    record that it was flagged. Each span must be minor and findable EXACTLY once in the
+    text as it stands after the earlier edits (so overlapping spans fail as "not found"
+    rather than being skipped). A replacement must pass `_safe_edit`; an empty one is a
+    delete, held to the phrase-not-sentence guards above. Image markers must survive
+    untouched, and the result must still hold some prose.
     """
     if not only_minor(claims):
         return None
@@ -54,19 +90,22 @@ def strip_claims(reply: str, claims: list[dict]) -> str | None:
     text = reply
     for claim in claims:
         span = claim.get("span") or ""
+        replacement = (claim.get("replacement") or "").strip()
         core = span.strip()
-        if not core:
+        if not core or "\n" in core:
             return None
-        if (
-            len(core) > _MAX_SPAN_CHARS
-            or len(core.split()) > _MAX_SPAN_WORDS
-            or "\n" in core
+        if replacement:
+            if not _safe_edit(core, replacement):
+                return None
+        elif (
+            len(core) > _MAX_DELETE_CHARS
+            or len(_words(core)) > _MAX_REMOVED_WORDS
             or core.endswith(_SENTENCE_END)
         ):
             return None
         if text.count(span) != 1:
             return None
-        text = text.replace(span, "", 1)
+        text = text.replace(span, replacement, 1)
     if doc_images.markers_in(text) != markers_before:
         return None
     text = _tidy(text)
@@ -101,7 +140,7 @@ class GuardrailAgent:
         mixing process and passage material is judged against both.
 
         A failed verdict carries `unsupported_claims` as a list of
-        `{span, severity, reason}` dicts: the coordinator reads the severities to choose
+        `{span, replacement, severity, reason}` dicts: the coordinator reads the severities to choose
         between a Python delete, an LLM repair and a handoff. `reason` joins the per-claim
         reasons for the log line and the eval CSV.
         """
