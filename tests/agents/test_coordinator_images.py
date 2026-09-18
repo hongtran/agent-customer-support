@@ -120,7 +120,11 @@ async def test_the_output_guardrail_judges_prose_not_signatures():
 async def test_a_flagged_reply_is_replaced_and_needs_no_signing():
     c = _coord(f"Anh/Chị nhấn {ICON_MARKER} để tạo hồ sơ.")
     c.guardrail.check_output = AsyncMock(
-        return_value={"pass": False, "reason": "bịa nút", "unsupported_claims": ["nút X"]}
+        return_value={
+            "pass": False,
+            "reason": "bịa nút",
+            "unsupported_claims": [{"span": "nút X", "severity": "critical", "reason": "bịa nút"}],
+        }
     )
     res = await _turn(c)
     assert "img:" not in res.reply

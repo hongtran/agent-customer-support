@@ -10,6 +10,8 @@ from agent_customer_support.agents.prompts import (
     KNOWLEDGE_COMPOSE_PROMPT,
     KNOWLEDGE_COMPOSE_PROMPT_WITH_QA,
     KNOWLEDGE_OTHER_APPLICATION_NOTE,
+    KNOWLEDGE_REPAIR_INSTRUCTION,
+    KNOWLEDGE_REPAIR_PROMPT,
     KNOWLEDGE_RESUME_NO_CLARIFY,
     PROCESS_BLOCK,
 )
@@ -236,6 +238,48 @@ class KnowledgeAgent:
             answer=complete_text(messages=messages, system=system, model=model),
             cited=[],
         )
+
+    async def repair(self, reply: str, claims: list[dict], cited_passages: list[str]) -> str | None:
+        """Rewrite `reply` so the flagged minor claims match the sources it cited.
+
+        The second rung of the coordinator's repair ladder: the guardrail found only
+        MINOR unsupported claims, and `guardrail.strip_claims` refused to delete them in
+        Python (a whole sentence, or a span it could not find exactly once). One call,
+        no retry loop here -- the coordinator judges the result once more and escalates
+        if it still fails.
+
+        The model may delete or reword, never add. That last rule is enforced in code
+        for the one thing that would be expensive to get wrong: an image marker the
+        original did not carry is dropped, because presigning an invented one renders
+        a broken picture (the same guard `doc_images.select` applies to compose).
+        Citations are not touched -- the caller keeps the original answer's, since a
+        repair cannot have drawn on a source the answer did not.
+
+        Returns None when the model produced nothing, so the caller can escalate.
+        """
+        claims_block = "\n".join(f'- "{c.get("span", "")}": {c.get("reason", "")}' for c in claims)
+        content = (
+            f"NGUỒN ĐÃ DẪN:\n{_passages_block(cited_passages)}"
+            f"\n\nCÂU TRẢ LỜI:\n{reply}"
+            f"\n\nÝ THIẾU CĂN CỨ:\n{claims_block}"
+            f"\n\n{KNOWLEDGE_REPAIR_INSTRUCTION}"
+        )
+        # `llm.knowledge.repair`: distinguishable from the compose call in a trace, the
+        # same way contextualize is.
+        with tracing.step("repair"):
+            raw = complete_text(
+                messages=[{"role": "user", "content": content}],
+                system=[PROCESS_BLOCK, {"type": "text", "text": KNOWLEDGE_REPAIR_PROMPT}],
+                model=get_settings().model_for("knowledge"),
+            )
+        repaired = (raw or "").strip()
+        if not repaired:
+            return None
+        # The original reply's markers are the whole catalog a repair may draw on.
+        allowed: dict[str, set[str]] = {}
+        for _kind, slug, name in doc_images.markers_in(reply):
+            allowed.setdefault(slug, set()).add(name)
+        return doc_images.select(repaired, allowed, get_settings().max_reply_images).strip()
 
     async def _safe_qa_search(
         self, ctx: TurnContext, query: str, applications: list[str] | None, cfg: Settings

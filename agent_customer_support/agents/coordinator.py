@@ -4,7 +4,7 @@ from agent_customer_support import doc_images
 from agent_customer_support.agents.context import TurnContext
 from agent_customer_support.agents.escalation import EscalationAgent
 from agent_customer_support.agents.flow import FlowAgent
-from agent_customer_support.agents.guardrail import GuardrailAgent
+from agent_customer_support.agents.guardrail import GuardrailAgent, only_minor, strip_claims
 from agent_customer_support.agents.knowledge import KnowledgeAgent
 from agent_customer_support.agents.prompts import OUT_OF_SCOPE_REPLY
 from agent_customer_support.agents.triage import TriageAgent
@@ -121,22 +121,63 @@ class Coordinator:
             # something. `cited_passages` is empty for every other route (flow,
             # escalation, out_of_scope) and for knowledge replies that cited nothing, so
             # check_output short-circuits there without an LLM call.
-            gout = await self.guardrail.check_output(result.reply, result.cited_passages)
-            if not gout["pass"]:
-                logger.warning("ungrounded reply, escalating: %s", gout.get("reason"))
-                # Hand off rather than dead-end. We already know the composed answer
-                # cannot be trusted, and the citations belonged to that answer — dropping
-                # them keeps a source list from vouching for text the user never sees.
-                result = await self._traced(
-                    "escalation",
-                    lambda: self.escalation.run(ctx, reason="ungrounded answer"),
-                    ctx,
-                )
-                result.reply = _FALLBACK_REPLY
-                result.citations = []
+            # gout = await self.guardrail.check_output(result.reply, result.cited_passages)
+            # repaired: str | None = None
+            # if not gout["pass"]:
+            #     result, repaired = await self._repair_or_escalate(ctx, result, gout)
             resp = await self._finish(ctx, result, session)
-            turn.update(output={"reply": resp.reply, "escalated": resp.escalated})
+            turn.update(
+                output={"reply": resp.reply, "escalated": resp.escalated}
+            )
             return resp
+
+    async def _repair_or_escalate(
+        self, ctx: TurnContext, result: AgentResult, gout: dict
+    ) -> tuple[AgentResult, str | None]:
+        """Rescue a flagged reply when the judge found only minor problems; else hand off.
+
+        Three rungs, cheapest first, and the second tag says which one rescued it:
+          1. "python"  — every claim is minor and `strip_claims` can delete each span
+             safely. No further judge call: Python removed exactly the text the judge
+             named, so re-judging would spend a call to confirm the judge's own list.
+          2. "llm"     — every claim is minor but a span was not safely deletable (a
+             whole sentence, or text not found exactly once). One repair call in
+             KnowledgeAgent, then the judge sees the repaired reply once more.
+          3. None      — any critical claim, no named claim at all, or a repair that
+             still fails: escalate exactly as before.
+
+        Citations survive a repair: a repair may delete or reword, never add, so the
+        sources still vouch for what remains. They are dropped only on escalation,
+        where they would vouch for text the user never sees.
+        """
+        claims = gout.get("unsupported_claims") or []
+        if only_minor(claims):
+            stripped = strip_claims(result.reply, claims)
+            if stripped is not None:
+                logger.info("ungrounded reply repaired in python: %s", gout.get("reason"))
+                result.reply = stripped
+                return result, "python"
+            with tracing.agent_span("knowledge", input={"claims": claims}) as sp:
+                fixed = await self.knowledge.repair(result.reply, claims, result.cited_passages)
+                sp.update(output={"repaired": fixed})
+            if fixed:
+                recheck = await self.guardrail.check_output(fixed, result.cited_passages)
+                if recheck["pass"]:
+                    logger.info("ungrounded reply repaired by llm: %s", gout.get("reason"))
+                    result.reply = fixed
+                    return result, "llm"
+        logger.warning("ungrounded reply, escalating: %s", gout.get("reason"))
+        # Hand off rather than dead-end. We already know the composed answer cannot be
+        # trusted, and the citations belonged to that answer — dropping them keeps a
+        # source list from vouching for text the user never sees.
+        result = await self._traced(
+            "escalation",
+            lambda: self.escalation.run(ctx, reason="ungrounded answer"),
+            ctx,
+        )
+        result.reply = _FALLBACK_REPLY
+        result.citations = []
+        return result, None
 
     async def _route(self, ctx: TurnContext, session) -> AgentResult:
         # Resume pending verification

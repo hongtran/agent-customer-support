@@ -2,7 +2,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from agent_customer_support.server import app
-from agent_customer_support.channels.deps import get_qa_store, get_conversation_store
+from agent_customer_support.channels.deps import (
+    get_conversation_store,
+    get_feedback_store,
+    get_qa_store,
+)
 from agent_customer_support.models import Conversation, Turn
 
 pytestmark = pytest.mark.asyncio
@@ -34,6 +38,18 @@ class FakeQAStore:
         return record
 
 
+class FakeFeedbackStore:
+    def __init__(self):
+        self.records = {}
+
+    async def put(self, record):
+        self.records[record.message_id] = record
+        return record
+
+    async def delete(self, message_id):
+        self.records.pop(message_id, None)
+
+
 def _make_conv():
     user = Turn(role="user", content="Làm sao xoá mẫu?")
     asst = Turn(role="assistant", content="Sai rồi: bạn không thể xoá.")
@@ -45,6 +61,7 @@ def test_feedback_down_creates_record(as_user):
     qa = FakeQAStore()
     app.dependency_overrides[get_conversation_store] = lambda: FakeConvStore(conv)
     app.dependency_overrides[get_qa_store] = lambda: qa
+    app.dependency_overrides[get_feedback_store] = lambda: FakeFeedbackStore()
     client = TestClient(app)
     resp = client.post(
         "/widget/feedback",
@@ -64,6 +81,7 @@ def test_feedback_unknown_message_id_404(as_user):
     conv, _ = _make_conv()
     app.dependency_overrides[get_conversation_store] = lambda: FakeConvStore(conv)
     app.dependency_overrides[get_qa_store] = lambda: FakeQAStore()
+    app.dependency_overrides[get_feedback_store] = lambda: FakeFeedbackStore()
     client = TestClient(app)
     resp = client.post(
         "/widget/feedback",
@@ -78,6 +96,7 @@ def test_feedback_repeat_does_not_duplicate(as_user):
     qa = FakeQAStore()
     app.dependency_overrides[get_conversation_store] = lambda: FakeConvStore(conv)
     app.dependency_overrides[get_qa_store] = lambda: qa
+    app.dependency_overrides[get_feedback_store] = lambda: FakeFeedbackStore()
     client = TestClient(app)
     body = {"conversation_id": "c1", "message_id": asst_id, "signal": "down"}
     client.post("/widget/feedback", json=body)

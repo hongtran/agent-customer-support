@@ -195,10 +195,17 @@ export async function getMyApplications(): Promise<string[]> {
   return data.enabled_applications ?? [];
 }
 
-export async function sendFeedback(conversationId: string, messageId: string) {
+/** "clear" takes back an earlier vote (the user clicked the same button again). */
+export type FeedbackSignal = "up" | "down" | "clear";
+
+export async function sendFeedback(
+  conversationId: string,
+  messageId: string,
+  signal: FeedbackSignal,
+) {
   await request("/widget/feedback", {
     method: "POST",
-    body: JSON.stringify({ conversation_id: conversationId, message_id: messageId, signal: "down" }),
+    body: JSON.stringify({ conversation_id: conversationId, message_id: messageId, signal }),
   });
 }
 

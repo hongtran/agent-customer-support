@@ -102,6 +102,7 @@ class Settings(BaseSettings):
     table_requests: str = "acs_requests"
     table_qa: str = "acs_qa"
     table_usage: str = "acs_usage"
+    table_feedback: str = "acs_feedback"
 
     # per-customer daily question limit: "today" is counted in this timezone, and a
     # day's counter item is expired by DynamoDB TTL this many days later

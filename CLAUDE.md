@@ -125,6 +125,7 @@ no seed script by design.
 | `RequestBacklog` | DynamoDB | Bug/feature/how-to records logged on escalation |
 | `AttachmentStore` | S3 | Uploaded screenshot bytes; the turn keeps only the key |
 | `UsageStore` | DynamoDB | Per-customer daily question counter (rate limit) |
+| `FeedbackStore` | DynamoDB | Like/dislike per assistant message, keyed `message_id` (latest vote wins, clear deletes) |
 
 **Daily question limit.** `CustomerProfile.daily_question_limit` is N (`None` = unlimited;
 admins are never limited). `/widget/chat` calls `UsageStore.try_consume` after the 413 check
@@ -258,8 +259,32 @@ grounding alone; scope stays triage's job, and mixing the two is what made the p
 single moderation verdict hard to tune. **Empty `cited_passages` means no LLM call at
 all**: every non-knowledge route and every clarify/process-only reply lands there, and
 judging them would flag correct replies while spending a call on every turn. It still
-fails OPEN. A flagged reply is replaced with `_FALLBACK_REPLY` and escalated, and its
-citations are dropped — they vouched for text the user will never see.
+fails OPEN.
+
+**A failed verdict names each claim, and severity picks the repair.** The judge returns
+`unsupported_claims` as `{span, severity, reason}` (`GroundingVerdict` in
+`llm/schemas.py`): `span` is a verbatim substring of the reply, kept to the smallest
+phrase, and `severity` is `minor` (extra but harmless, changes nothing the user does) or
+`critical` (wrong or invented step, button, number, condition). `Coordinator._repair_or_escalate`
+then climbs a ladder, cheapest rung first:
+
+1. **Python delete** — every claim is minor and `guardrail.strip_claims` can remove each
+   span safely: found exactly once, short (80 chars / 12 words), not a whole sentence, not
+   inside an image marker, and the reply keeps some prose. All-or-nothing. The result is
+   **not re-judged**: Python removed exactly the text the judge named, so a second call
+   would only confirm the judge's own list.
+2. **LLM repair** — every claim is minor but Python refused. One `KnowledgeAgent.repair`
+   call (`llm.knowledge.repair`) with the same cited passages and the instruction "Xóa hoặc
+   sửa các ý sau cho khớp với nguồn. Không thêm ý mới."; an image marker the original did
+   not carry is dropped in code. The repaired reply **is** judged once more.
+3. **Escalate** — any critical claim, a failure with no named claim, or a repair that still
+   fails: the reply is replaced with `_FALLBACK_REPLY` and handed off, and its citations are
+   dropped — they vouched for text the user will never see. A repaired reply keeps its
+   citations, since a repair can only delete or reword, never add a source.
+
+`eval/guardrail_eval.py` computes a `repair_path` column from the same two pure functions,
+so a run shows how many false escalations the ladder would rescue before any repair call
+is paid for.
 
 `cited_passages` carries `exclude=True`: `Coordinator._traced` dumps every `AgentResult`
 into a Langfuse span, and full passage text would bloat every trace.

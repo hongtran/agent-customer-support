@@ -239,18 +239,37 @@ Bạn nhận: (1) QUY TRÌNH ở đầu system, (2) các NGUỒN mà câu trả 
 
 Nhiệm vụ DUY NHẤT: mọi KHẲNG ĐỊNH trong câu trả lời có được hai nguồn trên hỗ trợ không?
 - grounded=true khi mọi khẳng định về thao tác/nút/màn hình/trình tự/điều kiện/phân quyền đều
-  suy ra được từ QUY TRÌNH hoặc từ các NGUỒN đã dẫn.
-- grounded=false khi có khẳng định cụ thể KHÔNG có trong nguồn nào (bịa tên nút/menu/màn hình,
-  bịa bước, bịa điều kiện, bịa con số). Ghi rõ các khẳng định đó vào unsupported_claims.
-
+  suy ra, suy luận logic được từ QUY TRÌNH hoặc từ các NGUỒN đã dẫn.
+- grounded=false khi có khẳng định cụ thể KHÔNG có trong nguồn nào.
 KHÔNG đánh giá: văn phong, độ dài, mức độ lịch sự, có đúng phạm vi CenLab hay không, có nên hỏi
 lại hay không. Những việc đó thuộc khâu khác.
 KHÔNG coi là thiếu căn cứ:
 - token hình ảnh [[img:screen:...]] / [[img:icon:...]] — đây là ảnh thật từ tài liệu, hệ thống tự render;
 - câu hướng dẫn liên hệ quản trị hệ thống/admin (phân quyền, master data, cấu hình giao diện,
   mất dữ liệu, thêm/bớt tính năng) — đây là chính sách định tuyến cố định của hệ thống;
-- lời chào, câu dẫn, câu hỏi lại, hoặc câu nêu rõ giả định/điều kiện.
+- lời chào, câu dẫn, câu hỏi lại, hoặc câu nêu rõ giả định/điều kiện, ví dụ, giải thích, diễn giải, kí hiệu suy luận như: ->
 Diễn đạt lại bằng lời khác nhưng đúng ý nguồn thì VẪN là có căn cứ.
 
-grounded=true → reason rỗng, unsupported_claims rỗng.
+grounded=true → unsupported_claims rỗng.
 """
+
+# System text for KnowledgeAgent.repair: the guardrail flagged a reply with only MINOR
+# unsupported claims that `guardrail.strip_claims` could not delete safely (a whole
+# sentence, a span it could not find exactly once). The model gets the same sources the
+# answer cited and a list of the flagged spans; it may delete or reword, never add.
+KNOWLEDGE_REPAIR_PROMPT = """Bạn sửa lại một câu trả lời của trợ lý CenLab để mọi ý đều khớp với NGUỒN.
+Bạn nhận: QUY TRÌNH ở đầu system, các NGUỒN mà câu trả lời đã dẫn, CÂU TRẢ LỜI, và danh sách
+các Ý THIẾU CĂN CỨ (chép nguyên văn từ câu trả lời, kèm lý do).
+
+Quy tắc:
+- Với mỗi ý thiếu căn cứ: XÓA nó, hoặc SỬA cho đúng với NGUỒN/QUY TRÌNH. Không có cách sửa
+  có căn cứ thì xóa.
+- KHÔNG thêm ý mới, KHÔNG thêm bước, nút, màn hình hay điều kiện nào không có trong nguồn.
+- GIỮ NGUYÊN mọi phần còn lại của câu trả lời: từ ngữ, thứ tự, định dạng markdown, và mọi token
+  hình ảnh [[img:...]] đúng như cũ. Không thêm token hình ảnh mới.
+- Câu văn sau khi sửa phải trôi chảy, tự nhiên.
+
+Chỉ trả về câu trả lời đã sửa, không giải thích, không mở đầu.
+"""
+
+KNOWLEDGE_REPAIR_INSTRUCTION = "Xóa hoặc sửa các ý sau cho khớp với nguồn. Không thêm ý mới."

@@ -1,4 +1,4 @@
-.PHONY: build run test lint eval eval-retrieval eval-triage infra-up infra-down modal-download modal-deploy
+.PHONY: build run test lint eval eval-retrieval eval-triage eval-guardrail infra-up infra-down modal-download modal-deploy
 
 build:
 	poetry install
@@ -14,6 +14,8 @@ eval-retrieval:
 	poetry run python -m eval.run_eval --mode retrieval
 eval-triage:
 	poetry run python -m eval.triage_eval
+eval-guardrail:
+	poetry run python -m eval.guardrail_eval
 infra-up:
 	docker compose up -d
 infra-down:

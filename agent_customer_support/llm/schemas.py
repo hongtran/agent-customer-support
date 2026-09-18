@@ -95,6 +95,33 @@ class ComposedAnswer(BaseModel):
     )
 
 
+class UnsupportedClaim(BaseModel):
+    """One claim in a reply that no cited source supports.
+
+    `span` is a VERBATIM substring of the reply, kept to the smallest phrase that carries
+    the unsupported idea. That precision is not cosmetic: `guardrail.strip_claims` deletes
+    the span in Python when every claim is minor, and it can only do that if the text is
+    findable exactly once. A paraphrase or a whole sentence sends the reply to the LLM
+    repair path instead.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    span: str = Field(
+        description=(
+            "Đoạn văn bản CHÉP NGUYÊN VĂN từ câu trả lời (kể cả dấu câu và khoảng trắng), "
+            "ngắn nhất có thể — chỉ cụm từ chứa ý thiếu căn cứ, không phải cả câu."
+        )
+    )
+    severity: Literal["minor", "critical"] = Field(
+        description=(
+            "minor: chi tiết thừa không có trong nguồn nhưng không sai và không làm người "
+            "dùng thao tác khác đi (mẹo chung, ngữ cảnh vô hại). critical: bịa thông tin, không thể suy ra từ nguồn hoặc quy trình"
+        )
+    )
+    reason: str = Field(description="lý do ngắn, tiếng Việt")
+
+
 class GroundingVerdict(BaseModel):
     """Whether every claim in a reply is supported by the sources it cited.
 
@@ -102,6 +129,9 @@ class GroundingVerdict(BaseModel):
     passages and rules on grounding alone. Tone, scope and prompt-leakage are not its
     job -- scope is triage's gate, and mixing the three into one verdict is what made
     the previous single guardrail prompt hard to tune.
+
+    There is no top-level reason: each unsupported claim carries its own, and its
+    severity is what decides between a Python delete, an LLM repair and a handoff.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -109,7 +139,6 @@ class GroundingVerdict(BaseModel):
     grounded: bool = Field(description="true when every claim is supported by the sources")
     # Required, not optional: OpenAI strict mode demands every property appear in
     # `required`, and a field with a default would be dropped from it.
-    reason: str = Field(description="short reason; empty string when grounded is true")
-    unsupported_claims: list[str] = Field(
+    unsupported_claims: list[UnsupportedClaim] = Field(
         description="the specific claims with no support; empty list when grounded is true"
     )

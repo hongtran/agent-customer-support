@@ -31,7 +31,7 @@ type FeedbackSignal = "up" | "down";
 interface Props {
   messages: Message[];
   loading: boolean;
-  onFeedbackDown?: (messageId: string) => void;
+  onFeedback?: (messageId: string, signal: FeedbackSignal | "clear") => void;
 }
 
 /**
@@ -456,7 +456,7 @@ function CopyIcon({ done }: { done: boolean }) {
   );
 }
 
-export default function MessageList({ messages, loading, onFeedbackDown }: Props) {
+export default function MessageList({ messages, loading, onFeedback }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
   // Per-message selection, keyed by messageId. undefined = nothing picked yet.
   const [feedback, setFeedback] = useState<Record<string, FeedbackSignal | undefined>>({});
@@ -495,8 +495,8 @@ export default function MessageList({ messages, loading, onFeedbackDown }: Props
   const handleFeedback = (messageId: string, signal: FeedbackSignal) => {
     const next = feedback[messageId] === signal ? undefined : signal; // click again to clear
     setFeedback((prev) => ({ ...prev, [messageId]: next }));
-    // Only a dislike reaches the backend — likes are UI-only for now.
-    if (next === "down") onFeedbackDown?.(messageId);
+    // Every click is stored server-side; taking a vote back is sent as "clear".
+    onFeedback?.(messageId, next ?? "clear");
   };
 
   return (

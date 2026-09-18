@@ -180,6 +180,29 @@ class QARecord(BaseModel):
     updated_at: datetime = Field(default_factory=_now)
 
 
+# ---- Answer feedback ----
+
+
+class FeedbackRecord(BaseModel):
+    """A customer's like/dislike on one assistant message.
+
+    One item per message, keyed by ``message_id``: a message belongs to one conversation,
+    which belongs to one customer, so there is only ever one voter. A new vote overwrites
+    the old one, and clearing a vote deletes the item, so counts stay correct.
+    """
+
+    message_id: str
+    conversation_id: str
+    customer_id: str
+    signal: Literal["up", "down"]
+    # Copies of the text at vote time, so a feedback list is readable without loading
+    # each conversation. `answer` is the persisted form, with [[img:…]] markers.
+    question: str = ""
+    answer: str = ""
+    # Time of the latest vote — a changed vote replaces the item.
+    created_at: datetime = Field(default_factory=_now)
+
+
 # ---- Session ----
 
 

@@ -8,17 +8,20 @@ from agent_customer_support.models import (
     ChatResponse,
     Conversation,
     CustomerProfile,
+    FeedbackRecord,
     QARecord,
 )
 from agent_customer_support.agents.coordinator import Coordinator
 from agent_customer_support.channels.deps import (
     get_conversation_store,
     get_current_customer,
+    get_feedback_store,
     get_qa_store,
     get_usage_store,
 )
 from agent_customer_support.config import get_settings
 from agent_customer_support.stores.conversation_store import ConversationStore
+from agent_customer_support.stores.feedback_store import FeedbackStore
 from agent_customer_support.stores.qa_store import QAStore
 from agent_customer_support.stores.usage_store import UsageStore
 
@@ -97,7 +100,9 @@ async def get_my_applications(
 class FeedbackRequest(BaseModel):
     conversation_id: str
     message_id: str
-    signal: Literal["down"] = "down"
+    # "clear" = the user clicked their current vote again to take it back. The default
+    # stays "down" so an older client that never sent a signal keeps working.
+    signal: Literal["up", "down", "clear"] = "down"
 
 
 def _transcript(conv: Conversation) -> str:
@@ -109,6 +114,7 @@ async def feedback(
     req: FeedbackRequest,
     qa: QAStore = Depends(get_qa_store),
     convs: ConversationStore = Depends(get_conversation_store),
+    votes: FeedbackStore = Depends(get_feedback_store),
     customer: CustomerProfile = Depends(get_current_customer),
 ) -> dict:
     conv = await convs.load(req.conversation_id)
@@ -124,11 +130,30 @@ async def feedback(
     )
     if idx is None:
         raise HTTPException(status_code=404, detail="message not found")
+    if req.signal == "clear":
+        # A dislike's Q&A record is left in place: it was a real complaint when it was
+        # made, and CS can reject it.
+        await votes.delete(req.message_id)
+        return {"ok": True}
     bad_answer = conv.turns[idx].content
     question = next(
         (conv.turns[j].content for j in range(idx - 1, -1, -1) if conv.turns[j].role == "user"),
         "",
     )
+    # The vote is stored first: it is what this endpoint is for on every signal, while
+    # the Q&A record below only applies to a dislike.
+    await votes.put(
+        FeedbackRecord(
+            message_id=req.message_id,
+            conversation_id=req.conversation_id,
+            customer_id=customer.customer_id,
+            signal=req.signal,
+            question=question,
+            answer=bad_answer,
+        )
+    )
+    if req.signal == "up":
+        return {"ok": True}
     existing = await qa.find_by_feedback_message_id(req.message_id)
     if existing:
         existing.question = question

@@ -8,6 +8,7 @@ import InputBar from "@/components/InputBar";
 import {
   sendMessage,
   sendFeedback,
+  FeedbackSignal,
   Attachment,
   RateLimitError,
   UnauthorizedError,
@@ -54,8 +55,9 @@ export default function Home() {
     if (session.status === "ready") setRemaining(session.me.questions_remaining);
   }, [session]);
 
-  const handleFeedbackDown = (messageId: string) => {
-    sendFeedback(conversationId, messageId).catch(() => {});
+  // Fire and forget: a lost vote must never interrupt the chat.
+  const handleFeedback = (messageId: string, signal: FeedbackSignal) => {
+    sendFeedback(conversationId, messageId, signal).catch(() => {});
   };
 
   const handleNewConversation = () => {
@@ -145,7 +147,7 @@ export default function Home() {
         onLogout={() => logout(router)}
       />
       <div className="relative flex flex-1 flex-col overflow-hidden">
-        <MessageList messages={messages} loading={loading} onFeedbackDown={handleFeedbackDown} />
+        <MessageList messages={messages} loading={loading} onFeedback={handleFeedback} />
         {limitReached && !limitNoticeClosed && (
           // pointer-events-none on the layer, so the chat behind stays scrollable;
           // only the card itself takes clicks.

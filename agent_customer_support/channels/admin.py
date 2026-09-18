@@ -1,12 +1,19 @@
 from datetime import UTC, datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from agent_customer_support.applications import APPLICATION_SLUGS
-from agent_customer_support.channels.deps import get_qa_indexer, get_qa_store, require_admin
-from agent_customer_support.models import QARecord
+from agent_customer_support.channels.deps import (
+    get_feedback_store,
+    get_qa_indexer,
+    get_qa_store,
+    require_admin,
+)
+from agent_customer_support.models import FeedbackRecord, QARecord
 from agent_customer_support.rag.qa_indexer import QAIndexer
+from agent_customer_support.stores.feedback_store import FeedbackStore
 from agent_customer_support.stores.qa_store import QAStore
 
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
@@ -141,3 +148,13 @@ async def archive_qa(
     rec.status = "archived"
     rec.qdrant_point_id = None
     return await qa.update(rec)
+
+
+@router.get("/feedback")
+async def list_feedback(
+    signal: Literal["up", "down"] | None = None,
+    customer_id: str | None = None,
+    votes: FeedbackStore = Depends(get_feedback_store),
+) -> list[FeedbackRecord]:
+    """Likes and dislikes on assistant answers, newest first."""
+    return await votes.list(signal=signal, customer_id=customer_id)

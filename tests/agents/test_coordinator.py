@@ -225,3 +225,118 @@ async def test_out_of_scope_route_refuses_before_knowledge():
     assert res.escalated is False
     c.knowledge.run.assert_not_called()
     c.escalation.run.assert_not_called()
+
+
+# ---- output guardrail: repair ladder before escalating ----
+
+from agent_customer_support.models import Citation  # noqa: E402
+
+_CITED = [Citation(doc_id="d1", label="Tạo phiếu", kind="guide")]
+_ANSWER = "Đang sử dụng, Anh/Chị vào menu Phiếu yêu cầu rồi nhấn Tạo mới để lập phiếu."
+
+
+def _flagged_coord(claims: list[dict]):
+    c = _coord()
+    c.sessions.get.return_value = SessionState(conversation_id="cv1", pending="knowledge_clarify")
+    c.knowledge.run = AsyncMock(
+        return_value=AgentResult(
+            reply=_ANSWER,
+            resolved=True,
+            citations=_CITED,
+            cited_passages=["Vào menu Phiếu yêu cầu."],
+        )
+    )
+    c.knowledge.repair = AsyncMock(return_value=None)
+    c.guardrail.check_output = AsyncMock(
+        return_value={"pass": False, "reason": "x", "unsupported_claims": claims}
+    )
+    c.escalation.run = AsyncMock(return_value=AgentResult(reply="Đã chuyển CS.", escalated=True))
+    return c
+
+
+async def _turn(c):
+    return await c.handle_turn(customer_id="c1", conversation_id="cv1", message="q", attachments=[])
+
+
+async def test_minor_claims_are_deleted_in_python_without_a_second_judge_call():
+    c = _flagged_coord([{"span": "Đang sử dụng, ", "severity": "minor", "reason": "thừa"}])
+    res = await _turn(c)
+    assert res.reply == "Anh/Chị vào menu Phiếu yêu cầu rồi nhấn Tạo mới để lập phiếu."
+    assert res.escalated is False
+    # The sources still vouch for what remains, so they stay attached.
+    assert res.citations == _CITED
+    assert c.guardrail.check_output.await_count == 1
+    c.knowledge.repair.assert_not_awaited()
+    c.escalation.run.assert_not_awaited()
+
+
+async def test_a_span_python_cannot_delete_goes_to_the_llm_repair_and_is_judged_again():
+    # Ends with a full stop: a whole sentence, which strip_claims refuses.
+    c = _flagged_coord([{"span": "để lập phiếu.", "severity": "minor", "reason": "thừa"}])
+    c.knowledge.repair = AsyncMock(return_value="Anh/Chị vào menu Phiếu yêu cầu rồi nhấn Tạo mới.")
+    c.guardrail.check_output = AsyncMock(
+        side_effect=[
+            {
+                "pass": False,
+                "reason": "x",
+                "unsupported_claims": [
+                    {"span": "để lập phiếu.", "severity": "minor", "reason": "thừa"}
+                ],
+            },
+            {"pass": True, "reason": ""},
+        ]
+    )
+    res = await _turn(c)
+    assert res.reply == "Anh/Chị vào menu Phiếu yêu cầu rồi nhấn Tạo mới."
+    assert res.escalated is False
+    assert res.citations == _CITED
+    # Repaired against the same sources the original answer cited.
+    c.knowledge.repair.assert_awaited_once_with(
+        _ANSWER,
+        [{"span": "để lập phiếu.", "severity": "minor", "reason": "thừa"}],
+        ["Vào menu Phiếu yêu cầu."],
+    )
+    second = c.guardrail.check_output.await_args_list[1]
+    assert second.args == (
+        "Anh/Chị vào menu Phiếu yêu cầu rồi nhấn Tạo mới.",
+        ["Vào menu Phiếu yêu cầu."],
+    )
+    c.escalation.run.assert_not_awaited()
+
+
+async def test_a_repair_that_still_fails_escalates():
+    c = _flagged_coord([{"span": "để lập phiếu.", "severity": "minor", "reason": "thừa"}])
+    c.knowledge.repair = AsyncMock(return_value="vẫn sai")
+    res = await _turn(c)
+    assert res.escalated is True
+    assert res.citations == []
+    assert "vẫn sai" not in res.reply
+    assert c.guardrail.check_output.await_count == 2
+
+
+async def test_a_repair_that_returns_nothing_escalates():
+    c = _flagged_coord([{"span": "để lập phiếu.", "severity": "minor", "reason": "thừa"}])
+    res = await _turn(c)
+    assert res.escalated is True
+    assert c.guardrail.check_output.await_count == 1
+
+
+async def test_a_critical_claim_escalates_without_any_repair_attempt():
+    c = _flagged_coord(
+        [
+            {"span": "Đang sử dụng, ", "severity": "minor", "reason": "thừa"},
+            {"span": "Tạo mới", "severity": "critical", "reason": "sai nút"},
+        ]
+    )
+    res = await _turn(c)
+    assert res.escalated is True
+    assert res.citations == []
+    c.knowledge.repair.assert_not_awaited()
+    assert c.guardrail.check_output.await_count == 1
+
+
+async def test_a_failure_with_no_named_claims_escalates():
+    c = _flagged_coord([])
+    res = await _turn(c)
+    assert res.escalated is True
+    c.knowledge.repair.assert_not_awaited()

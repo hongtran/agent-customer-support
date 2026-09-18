@@ -13,6 +13,7 @@ from agent_customer_support.observability import tracing
 from agent_customer_support.stores.attachment_store import AttachmentStore
 from agent_customer_support.stores.customer_registry import CustomerRegistry
 from agent_customer_support.stores.conversation_store import ConversationStore
+from agent_customer_support.stores.feedback_store import FeedbackStore
 from agent_customer_support.stores.flow_store import FlowStore
 from agent_customer_support.stores.request_backlog import RequestBacklog
 from agent_customer_support.stores.usage_store import UsageStore
@@ -35,6 +36,7 @@ async def lifespan(app: FastAPI):
         QAStore(),
         AttachmentStore(),
         UsageStore(),
+        FeedbackStore(),
     ):
         try:
             await store.init()

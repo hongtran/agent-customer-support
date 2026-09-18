@@ -681,3 +681,67 @@ async def test_a_passage_with_no_headings_gets_no_annotation():
     content = await _compose_content(["| Vai trò | Không | Gán một hoặc nhiều vai trò. |"])
     assert "các mục trong đoạn này" not in content
     assert "[0]" in content  # still numbered as before
+
+
+# ---- repair: rewrite an answer the guardrail flagged with only minor claims ----
+
+_CLAIMS = [
+    {"span": "ở góc phải", "severity": "minor", "reason": "Nguồn không nêu vị trí nút"},
+]
+
+
+async def test_repair_sends_sources_answer_and_claims_under_the_process_block():
+    from agent_customer_support.agents.prompts import KNOWLEDGE_REPAIR_PROMPT, PROCESS_BLOCK
+
+    captured: dict = {}
+
+    def fake_text(*, messages, system, model=None):
+        captured["system"] = system
+        captured["content"] = messages[0]["content"]
+        return "Nhấn Lưu để lưu phiếu."
+
+    with patch("agent_customer_support.agents.knowledge.complete_text", side_effect=fake_text):
+        out = await KnowledgeAgent().repair(
+            "Nhấn Lưu ở góc phải để lưu phiếu.", _CLAIMS, ["Nhấn Lưu để lưu phiếu."]
+        )
+
+    assert out == "Nhấn Lưu để lưu phiếu."
+    assert captured["system"][0] is PROCESS_BLOCK
+    assert captured["system"][-1]["text"] == KNOWLEDGE_REPAIR_PROMPT
+    assert "[0] Nhấn Lưu để lưu phiếu." in captured["content"]
+    assert "Nhấn Lưu ở góc phải để lưu phiếu." in captured["content"]
+    assert "ở góc phải" in captured["content"]
+    assert "Nguồn không nêu vị trí nút" in captured["content"]
+    assert "Xóa hoặc sửa các ý sau cho khớp với nguồn. Không thêm ý mới." in captured["content"]
+
+
+async def test_repair_returns_none_when_the_model_produces_nothing():
+    with patch("agent_customer_support.agents.knowledge.complete_text", return_value="  "):
+        assert await KnowledgeAgent().repair("Nhấn Lưu.", _CLAIMS, ["p"]) is None
+
+
+async def test_repair_drops_an_image_marker_the_original_did_not_have():
+    """The prompt says add nothing, but an invented marker would be presigned into a
+    broken image, so the guard is in code — the same rule as doc_images.select."""
+    original = "Nhấn [[img:icon:lay_mau/image3.png]] ở góc phải để lưu."
+    repaired = "Nhấn [[img:icon:lay_mau/image3.png]] để lưu. [[img:screen:lay_mau/image9.png]]"
+    with patch("agent_customer_support.agents.knowledge.complete_text", return_value=repaired):
+        out = await KnowledgeAgent().repair(original, _CLAIMS, ["p"])
+    assert out == "Nhấn [[img:icon:lay_mau/image3.png]] để lưu."
+
+
+async def test_repair_is_labelled_as_its_own_llm_step():
+    """Lands in Langfuse as llm.knowledge.repair, so an evaluator can target it apart
+    from the compose call."""
+    from agent_customer_support.observability import tracing
+
+    seen: dict = {}
+
+    def fake_text(*, messages, system, model=None):
+        seen["labels"] = tracing.current_labels()
+        return "ok đã sửa"
+
+    with patch("agent_customer_support.agents.knowledge.complete_text", side_effect=fake_text):
+        with tracing.agent_span("knowledge"):
+            await KnowledgeAgent().repair("Nhấn Lưu ở góc phải.", _CLAIMS, ["p"])
+    assert seen["labels"] == ("knowledge", "repair")
