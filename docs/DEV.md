@@ -77,6 +77,24 @@ curl -X POST http://localhost:8800/widget/chat \
   -d '{"conversation_id":"cv1","message":"Làm sao xử lý PYC sự cố?"}'
 ```
 
+## Admin conversation history
+
+`/admin/customers/{id}` in the UI lists a customer's conversations and shows each one
+turn by turn, with screenshots. The list reads the GSI `customer_id-updated_at-index` on
+the conversations table (hash `customer_id`, range `updated_at`, both strings; projection
+INCLUDE `title`, `created_at`, `turn_count`).
+
+- **Local:** the API creates the index on start (`DYNAMODB_AUTO_CREATE_TABLES=true`),
+  also on a table that already exists.
+- **Prod:** with auto-create off, the index must be added by infrastructure first.
+
+The index is sparse: conversations written before it existed have no `updated_at` and do
+not appear until they get a new turn. Backfill them once (dry run without `--apply`):
+
+```bash
+poetry run python scripts/backfill_conversation_summary.py --apply
+```
+
 ## Tests
 
 ```bash

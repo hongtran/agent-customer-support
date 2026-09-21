@@ -1,6 +1,6 @@
 import logging
 
-from agent_customer_support import doc_images
+from agent_customer_support import image_urls
 from agent_customer_support.agents.context import TurnContext
 from agent_customer_support.agents.escalation import EscalationAgent
 from agent_customer_support.agents.flow import FlowAgent
@@ -290,16 +290,7 @@ class Coordinator:
         Runs after the output guardrail so the guardrail judges prose, not signatures.
         Never raises: a signing problem drops the picture, never the answer.
         """
-        try:
-            urls = {}
-            for kind, slug, name in doc_images.markers_in(reply):
-                urls[(slug, name)] = await self.doc_images.presign(slug, name)
-            if not urls:
-                return reply
-            return doc_images.presign_markers(reply, lambda s, n: urls[(s, n)])
-        except Exception as exc:  # noqa: BLE001 - degrade, never break a generated reply
-            logger.warning("doc image presign failed, replying without images: %s", exc)
-            return doc_images.strip(reply)
+        return await image_urls.resolve_doc_images(self.doc_images, reply)
 
     async def _store_attachments(self, ctx: TurnContext, turn_id: str) -> list[StoredAttachment]:
         """Upload this turn's images to S3 and return their keys.
@@ -324,10 +315,4 @@ class Coordinator:
     async def _presign(self, stored: list[StoredAttachment]) -> list[AttachmentRef]:
         """Signed URLs so the widget can render what was just uploaded. Also
         best-effort: a signing failure costs a thumbnail, not the answer."""
-        if not stored:
-            return []
-        try:
-            return [await self.attachments.presign(s) for s in stored]
-        except Exception as exc:  # noqa: BLE001 - degrade, never break a generated reply
-            logger.warning("presign failed, returning reply without image urls: %s", exc)
-            return []
+        return await image_urls.presign_attachments(self.attachments, stored)
