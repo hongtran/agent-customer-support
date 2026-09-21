@@ -298,4 +298,4 @@ class AgentResult(BaseModel):
     # based on without re-running retrieval. Excluded from serialisation on purpose:
     # Coordinator._traced dumps every AgentResult into a Langfuse span, and full passage
     # text would bloat every trace for a value nothing downstream reads.
-    cited_passages: list[str] = Field(default_factory=list, exclude=True)
+    source_passages: list[str] = Field(default_factory=list, exclude=True)

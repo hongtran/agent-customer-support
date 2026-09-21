@@ -283,9 +283,9 @@ def select(
 
     NOTE: the composer still DECLARES `quy_trinh_chung` and `qa:<i>`, and this function
     is the only place they are dropped. Two reasons they must stay declarable:
-    `passages_for` feeds the grounding judge from the same declarations, so removing the
-    Q&A ids would leave a mixed guide+CS answer judged against the guide alone and its
-    CS-derived claims flagged as unsupported; and taking away the process id would push
+    `passages_for` decides from the same declarations whether the grounding judge runs at
+    all, so removing the Q&A ids would skip the judge for an answer resting on a CS
+    record; and taking away the process id would push
     the model to attribute a process claim to whichever passage is nearest, which is the
     fabricated citation this module exists to prevent.
 
@@ -316,10 +316,12 @@ def passages_for(
     passages: list[str],
     qa_passages: list[str] | None = None,
 ) -> list[str]:
-    """Text of the cited passages, for the grounding judge.
+    """Text of the cited passages.
 
-    Only what the answer claimed to stand on: judging a reply against passages it never
-    cited would flag correct answers for not using material they had no reason to use.
+    KnowledgeAgent uses this as the grounding judge's GATE: a non-empty result means the
+    answer stood on at least one real passage, and the judge then sees every passage the
+    turn retrieved (not only these), so a wrong or missing citation cannot get a correct
+    claim flagged. Empty means the judge is skipped.
 
     Deduped by passage, not by declaration — one chunk cited for two of its sections is
     still one passage, and handing the judge the same text twice would waste tokens.

@@ -234,7 +234,7 @@ _NO_REPAIR = {
 
 
 async def repair_outcome(
-    verdict: dict, answer: str, cited_passages: list[str]
+    verdict: dict, answer: str, source_passages: list[str]
 ) -> tuple[dict, TurnCost]:
     """Run the rung `repair_path` names and judge what it produced.
 
@@ -261,11 +261,11 @@ async def repair_outcome(
         if path == "python":
             repaired = apply_claims(answer, claims)
         elif path == "llm":
-            repaired = await KnowledgeAgent().repair(answer, claims, cited_passages)
+            repaired = await KnowledgeAgent().repair(answer, claims, source_passages)
         else:
             repaired = None
         if repaired is not None:
-            recheck = await GuardrailAgent().check_output(repaired, cited_passages)
+            recheck = await GuardrailAgent().check_output(repaired, source_passages)
             cols["repaired_answer"] = repaired
             cols["repaired_guardrail_pass"] = bool(recheck.get("pass", True))
             cols["repaired_unsupported_claims"] = format_claims(
@@ -281,7 +281,7 @@ def _judge_label(test: TestQuestion, run: AnswerRun) -> tuple[dict, TurnCost]:
 {test.question}
 
 SOURCE (passages the answer cited; the QUY TRÌNH above is the other source):
-{_sources_block(run.cited_passages) or "(none)"}
+{_sources_block(run.source_passages) or "(none)"}
 
 REFERENCE answer:
 {test.reference_answer}
@@ -330,11 +330,11 @@ async def _one(test: TestQuestion, scope: bool) -> dict:
     # Always made -- the no-passages short-circuit is part of the behaviour under test.
     started = time.perf_counter()
     with usage.collect() as gu:
-        verdict = await GuardrailAgent().check_output(run.answer, run.cited_passages)
+        verdict = await GuardrailAgent().check_output(run.answer, run.source_passages)
     guard_cost = _turn_cost(gu, started)
 
     # What the coordinator's repair ladder would do next, and how the result judges.
-    repair_cols, repair_cost = await repair_outcome(verdict, run.answer, run.cited_passages)
+    repair_cols, repair_cost = await repair_outcome(verdict, run.answer, run.source_passages)
 
     # Only an answer can be grounded or not. Clarify / no-answer replies are canned text
     # and a suspected-bug reply is a diagnosis, not an answer; they are counted, not rated.
@@ -349,8 +349,8 @@ async def _one(test: TestQuestion, scope: bool) -> dict:
         "application": test.application,
         "reference_answer": test.reference_answer,
         "outcome": run.outcome,
-        "n_cited": len(run.cited_passages),
-        "source": _sources_block(run.cited_passages),
+        "n_sources": len(run.source_passages),
+        "source": _sources_block(run.source_passages),
         "answer": run.answer,
         "answer_citations": "|".join(format_citation(c) for c in run.citations),
         "guardrail_pass": bool(verdict.get("pass", True)),

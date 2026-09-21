@@ -26,7 +26,7 @@ def _sources_block(passages: list[str]) -> str:
 
 
 def only_minor(claims: list[dict]) -> bool:
-    """True when there is at least one claim and none is critical.
+    """True when there is at least one claim and none is major.
 
     An empty list is False on purpose: `grounded=false` with nothing named is a judge
     that could not point at the problem, and a reply we cannot repair is one we hand off.
@@ -125,18 +125,23 @@ class GuardrailAgent:
             return {"pass": False, "reason": "oversized_input"}
         return {"pass": True, "reason": ""}
 
-    async def check_output(self, reply: str, cited_passages: list[str] | None = None) -> dict:
-        """Judge whether every claim in `reply` is supported by the sources it cited.
+    async def check_output(self, reply: str, source_passages: list[str] | None = None) -> dict:
+        """Judge whether every claim in `reply` is supported by this turn's sources.
+
+        `source_passages` is every passage the knowledge turn retrieved (guides and Q&A),
+        not only the ones the answer cited: a composer that cites the wrong chunk, or
+        forgets one it used, must not get its correct claims flagged.
 
         Grounding only. Tone, scope and prompt-leakage are not judged here — the scope
         gate is triage (see Coordinator._route) and mixing the three into one verdict is
         what made the previous single guardrail prompt hard to tune.
 
-        **No cited passages means no call.** A process-only answer, a clarifying question,
-        the canonical no-answer reply and every non-knowledge route arrive here with an
-        empty list; there is nothing to check them against, so judging them would flag
+        **No passages means no call.** KnowledgeAgent fills the list only when the answer
+        cited at least one real passage. A process-only answer, a clarifying question, the
+        canonical no-answer reply and every non-knowledge route arrive here with an empty
+        list; there is nothing to check them against, so judging them would flag
         correct replies and spend a call on every single turn. The process block still
-        rides in the system prefix for the answers that DO cite a passage, so a reply
+        rides in the system prefix for the answers that DO get judged, so a reply
         mixing process and passage material is judged against both.
 
         A failed verdict carries `unsupported_claims` as a list of
@@ -144,7 +149,7 @@ class GuardrailAgent:
         between a Python delete, an LLM repair and a handoff. `reason` joins the per-claim
         reasons for the log line and the eval CSV.
         """
-        if not cited_passages:
+        if not source_passages:
             return {"pass": True, "reason": ""}
 
         verdict = complete_structured(
@@ -152,7 +157,7 @@ class GuardrailAgent:
                 {
                     "role": "user",
                     "content": (
-                        f"NGUỒN ĐÃ DẪN:\n{_sources_block(cited_passages)}"
+                        f"NGUỒN:\n{_sources_block(source_passages)}"
                         f"\n\nCÂU TRẢ LỜI CẦN KIỂM TRA:\n{reply}"
                     ),
                 }

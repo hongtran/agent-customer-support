@@ -125,10 +125,12 @@ class UnsupportedClaim(BaseModel):
             "không thêm từ mới. Để rỗng nếu xóa hẳn span."
         )
     )
-    severity: Literal["minor"] = Field(
+    severity: Literal["minor", "major"] = Field(
         description=(
             "minor: chi tiết thừa không có trong nguồn nhưng không sai và không làm người "
-            "dùng thao tác khác đi (mẹo chung, ngữ cảnh vô hại)."
+            "dùng thao tác khác đi (mẹo chung, ngữ cảnh vô hại). "
+            "major: khẳng định cụ thể người dùng sẽ làm theo nhưng không có trong nguồn "
+            "(menu/nút/màn hình/trường, bước hoặc thứ tự, điều kiện/giá trị, hành vi hệ thống)."
         )
     )
     reason: str = Field(description="lý do ngắn, tiếng Việt")
