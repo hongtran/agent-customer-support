@@ -35,7 +35,7 @@ def _row(
         "application": "Lấy mẫu - Quan trắc",
         "reference_answer": "tham chiếu",
         "outcome": outcome,
-        "n_cited": 1,
+        "n_sources": 1,
         "source": "[0] đoạn trích",
         "answer": f"trả lời {rid}",
         "answer_citations": "Mục A",
@@ -518,7 +518,7 @@ def test_judge_sends_the_process_block_like_the_guardrail_does(monkeypatch):
     test = TestQuestion(
         id="Q1", question="q", keywords=[], reference_answer="ref", category="how_to"
     )
-    run = AnswerRun(answer="a", outcome="answered", abstained=False, cited_passages=["p0"])
+    run = AnswerRun(answer="a", outcome="answered", abstained=False, source_passages=["p0"])
 
     judged, _cost = ge._judge_label(test, run)
 

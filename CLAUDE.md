@@ -215,9 +215,9 @@ store are ours, not the customer's — naming them points at nothing they can op
 two shows **no sources at all**, which is the honest outcome.
 
 The other two stay *declarable* on purpose, and `select` is the only place they are
-dropped. `passages_for` feeds the grounding judge from the same declarations, so removing
-the Q&A ids would leave a mixed guide+CS answer judged against the guide alone and its
-CS-derived claims flagged as unsupported. And taking the process id out of the prompt would
+dropped. `passages_for` decides from the same declarations whether the grounding judge
+runs at all, so removing the Q&A ids would skip the judge for an answer resting on a CS
+record. And taking the process id out of the prompt would
 push the model to attribute a process claim to whichever passage is nearest — the
 fabricated citation the whole mechanism exists to prevent.
 
@@ -254,10 +254,12 @@ not "everything retrieved" as it did before. The clarify and no-answer paths cit
 those replies are canned text, not composed from a source.
 
 The **output guardrail** (`agents/guardrail.py`) is the second half. It receives the reply
-plus `AgentResult.cited_passages` — only the passages the answer stood on — and rules on
-grounding alone; scope stays triage's job, and mixing the two is what made the previous
-single moderation verdict hard to tune. **Empty `cited_passages` means no LLM call at
-all**: every non-knowledge route and every clarify/process-only reply lands there, and
+plus `AgentResult.source_passages` — **every passage the turn retrieved** (guides and Q&A),
+not only the cited ones, so a composer that cites the wrong chunk or forgets one it used
+does not get correct claims flagged — and rules on grounding alone; scope stays triage's job, and mixing the two is what made the previous
+single moderation verdict hard to tune. **Empty `source_passages` means no LLM call at
+all**: `KnowledgeAgent` fills it only when `citations.passages_for` finds at least one
+real cited passage, so every non-knowledge route and every clarify/process-only reply lands there, and
 judging them would flag correct replies while spending a call on every turn. It still
 fails OPEN.
 
@@ -292,7 +294,7 @@ a ladder, cheapest rung first:
 so a run shows how many false escalations the ladder would rescue before any repair call
 is paid for.
 
-`cited_passages` carries `exclude=True`: `Coordinator._traced` dumps every `AgentResult`
+`source_passages` carries `exclude=True`: `Coordinator._traced` dumps every `AgentResult`
 into a Langfuse span, and full passage text would bloat every trace.
 
 Citations are **not** persisted on the `Turn` — reloading history shows answers without
