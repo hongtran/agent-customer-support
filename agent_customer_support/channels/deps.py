@@ -7,8 +7,10 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from agent_customer_support.auth import decode_access_token
 from agent_customer_support.models import CustomerProfile
 from agent_customer_support.rag.qa_indexer import QAIndexer
+from agent_customer_support.stores.attachment_store import AttachmentStore
 from agent_customer_support.stores.conversation_store import ConversationStore
 from agent_customer_support.stores.customer_registry import CustomerRegistry
+from agent_customer_support.stores.doc_image_store import DocImageStore
 from agent_customer_support.stores.feedback_store import FeedbackStore
 from agent_customer_support.stores.qa_store import QAStore
 from agent_customer_support.stores.usage_store import UsageStore
@@ -42,6 +44,16 @@ def get_usage_store() -> UsageStore:
 @lru_cache
 def get_feedback_store() -> FeedbackStore:
     return FeedbackStore()
+
+
+@lru_cache
+def get_attachment_store() -> AttachmentStore:
+    return AttachmentStore()
+
+
+@lru_cache
+def get_doc_image_store() -> DocImageStore:
+    return DocImageStore()
 
 
 # auto_error=False so a missing header reaches our own handler and returns the same
