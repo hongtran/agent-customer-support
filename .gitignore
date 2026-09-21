@@ -21,7 +21,8 @@ node_modules/
 .agents/
 .playwright-mcp/
 .lavish/
-scripts/
+scripts/*
+!scripts/backfill_conversation_summary.py
 seeds/
 .superpowers/
 eval/
