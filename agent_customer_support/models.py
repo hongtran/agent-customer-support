@@ -3,7 +3,7 @@ from binascii import Error as BinasciiError
 from datetime import datetime, UTC
 from typing import Annotated, Literal
 from uuid import uuid4
-from pydantic import BaseModel, Field, StringConstraints, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
 
 def _now() -> datetime:
@@ -127,6 +127,27 @@ class AttachmentRef(BaseModel):
     url: str  # presigned GET, expires per s3_presign_expiry_seconds
 
 
+# ---- Contact ----
+
+
+class ContactInfo(BaseModel):
+    """What the user left for CS to call back, parsed by `contact.parse`.
+
+    Stored on the conversation and the backlog row, never on `CustomerProfile`: one
+    customer account is shared by many people at a company, so the person to call
+    is a property of this handoff, not of the account. `raw` is the whole message so
+    CS also sees anything the regexes could not name ("gọi sau 5h chiều").
+    """
+
+    phone: str | None = None
+    email: str | None = None
+    raw: str = ""
+
+    @property
+    def found(self) -> bool:
+        return bool(self.phone or self.email)
+
+
 # ---- Conversation ----
 
 
@@ -143,6 +164,8 @@ class Conversation(BaseModel):
     customer_id: str
     turns: list[Turn] = Field(default_factory=list)
     citations: list[str] = Field(default_factory=list)
+    # Left by the user after a handoff (see Coordinator._attach_contact). None until then.
+    contact: ContactInfo | None = None
 
 
 # ---- Request backlog ----
@@ -153,8 +176,17 @@ class RequestRecord(BaseModel):
     customer_id: str
     type: Literal["feature", "bug", "how_to_missing"]
     summary: str
+    # Ticket title as filed in MantisBT. Only a verified bug has one; rows written
+    # before tickets existed, and the other request types, leave it None.
+    title: str | None = None
     application: str | None = None
     transcript: str = ""
+    # Set when the MantisBT issue was created; None means "not configured" or "the
+    # create failed and CS was told to file it by hand" — the row exists either way.
+    mantis_issue_id: int | None = None
+    mantis_issue_url: str | None = None
+    # Filled in later by RequestBacklog.set_contact when the user answers the contact ask.
+    contact: ContactInfo | None = None
     created_at: datetime = Field(default_factory=_now)
 
 
@@ -206,13 +238,136 @@ class FeedbackRecord(BaseModel):
 # ---- Session ----
 
 
+_SLOT_LABELS: dict[str, str] = {
+    "module": "màn hình/menu",
+    "version": "phiên bản/môi trường",
+    "steps": "các bước tái hiện",
+    "expected": "kết quả mong đợi",
+    "actual": "kết quả thực tế",
+    "occurred_at": "thời điểm xảy ra",
+}
+
+# What a ticket has to say to be worth an engineer's time. The other three slots are
+# useful, never blocking -- a version number is not worth losing the report over.
+_REQUIRED_SLOTS = ("steps", "expected", "actual")
+
+
+class BugSlots(BaseModel):
+    """The fixed list of facts a bug ticket needs, and how much of it we have.
+
+    Both a domain type (it is persisted inside `SessionState.pending_context`
+    between turns) and the wire format of `VerificationDecision.slots` -- hence the
+    Vietnamese descriptions and `extra="forbid"`, which belong to the LLM side. It
+    lives here rather than in `llm/schemas.py` because the session is what carries
+    it across turns, and `models` importing the LLM layer would invert the
+    dependency the rest of the package keeps.
+
+    Every field is required with "" as the no-value case, the same rule as
+    `CitedSource.section`: a defaulted field is dropped from `required` under
+    OpenAI strict mode. `empty()` is how Python builds one, since that leaves no
+    default for the schema to lose.
+
+    There is no `has_image` here on purpose. Prior turns' screenshots are not
+    re-sent to the verification model, so whether one has ever arrived is a fact
+    only Python holds -- it lives on `VerifyContext` instead, where nothing invites
+    the model to overwrite it.
+
+    `module` is NOT `VerifyContext.application`, and the two names are kept apart on
+    purpose. An *application* is what the customer bought and what scopes retrieval
+    ("Lấy mẫu - Quan trắc", a slug in Qdrant); a *module* is one level down inside it
+    -- the menu, screen or page the user was on. Only the application reaches the
+    MantisBT `category` and the Qdrant filter, so conflating them would scope a search
+    to a screen name that matches nothing.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    module: str = Field(
+        description=(
+            "Màn hình/menu/trang cụ thể xảy ra lỗi, BÊN TRONG phân hệ — tên đúng như "
+            "trên giao diện (ví dụ: 'Danh sách phiếu yêu cầu', 'Import ký hiệu mẫu'). "
+            "KHÔNG phải tên phân hệ. Rỗng nếu chưa biết."
+        )
+    )
+    version: str = Field(description="Phiên bản hoặc môi trường (web/desktop). Rỗng nếu chưa biết.")
+    steps: str = Field(
+        description="Các bước người dùng đã làm để gặp lỗi, mỗi bước một dòng. Rỗng nếu chưa biết."
+    )
+    expected: str = Field(description="Kết quả người dùng mong đợi. Rỗng nếu chưa biết.")
+    actual: str = Field(
+        description="Điều thực sự xảy ra, kèm thông báo lỗi nếu có. Rỗng nếu chưa biết."
+    )
+    occurred_at: str = Field(description="Thời điểm hoặc tần suất xảy ra. Rỗng nếu chưa biết.")
+
+    @classmethod
+    def empty(cls) -> "BugSlots":
+        return cls(module="", version="", steps="", expected="", actual="", occurred_at="")
+
+    def merge(self, update: "BugSlots") -> "BugSlots":
+        """Apply a turn's reading of the slots without ever blanking a filled one.
+
+        The model sees the whole conversation and re-states every slot each turn, so
+        a slot it leaves empty means "nothing new here", never "forget that". A
+        non-empty value wins, which lets the user correct themselves.
+        """
+        return BugSlots(
+            **{
+                name: (getattr(update, name).strip() or getattr(self, name).strip())
+                for name in _SLOT_LABELS
+            }
+        )
+
+    def missing(self) -> list[str]:
+        """Labels of the required slots still empty, for the ticket's own note."""
+        return [_SLOT_LABELS[n] for n in _REQUIRED_SLOTS if not getattr(self, n).strip()]
+
+    def describe(self) -> str:
+        """The filled slots as a readable block for the ticket body."""
+        return "\n".join(
+            f"- {_SLOT_LABELS[name]}: {value.strip()}"
+            for name in _SLOT_LABELS
+            if (value := getattr(self, name)).strip()
+        )
+
+
+class VerifyContext(BaseModel):
+    """`SessionState.pending_context` while a bug is being verified.
+
+    A typed view over the dict rather than a replacement for it: the dict is what
+    Redis already holds, and sessions written before this type existed carry only
+    `application`, `summary` and `since_turn`. Every field therefore has a default,
+    and extra keys are ignored, so a live session mid-flow keeps working across a
+    deploy instead of failing validation and losing the collected evidence.
+    """
+
+    # The APPLICATION slug -- what the customer bought, what scopes Qdrant and what
+    # the ticket is filed under. The screen inside it is `slots.module`; see BugSlots
+    # on why the two are not the same field.
+    application: str | None = None
+    summary: str = ""
+    # Index of the turn the bug was first suspected on. The ticket attaches
+    # screenshots from there onward only, so an unrelated image sent earlier in the
+    # same conversation never lands on it.
+    since_turn: int = 0
+    slots: BugSlots = Field(default_factory=BugSlots.empty)
+    has_image: bool = False
+    report: dict | None = None
+
+
 class SessionState(BaseModel):
     conversation_id: str
-    active_flow_id: str | None = None
-    current_step_id: str | None = None
-    pending: Literal["verify_issue", "knowledge_clarify"] | None = None
+    pending: Literal["verify_issue", "knowledge_clarify", "collect_contact"] | None = None
     pending_context: dict | None = None
     selected_applications: list[str] = Field(default_factory=list)
+    # Routing counters. They live on the session because every one of them bounds a
+    # loop that spans turns, and they are what `routing.next_step` reads to turn a
+    # cap into a handoff. New fields with defaults on purpose: a session written
+    # before they existed must still load.
+    clarify_count: int = 0
+    verify_turns: int = 0
+    # Verification has already ruled this conversation a user error. Knowledge
+    # suspecting a bug again is the two of them disagreeing, not new evidence.
+    user_error_seen: bool = False
     updated_at: datetime = Field(default_factory=_now)
 
 
@@ -279,19 +434,41 @@ class ChatResponse(BaseModel):
 
 
 class AgentResult(BaseModel):
-    action: Literal["reply", "route"] = "reply"
+    """What one agent hands back to the driver.
+
+    The three `*_status` fields below are the whole routing contract: each agent
+    reports what it decided as a validated value, and `routing.next_step` reads
+    them without re-parsing any prose. They replaced a pair of booleans and a
+    tri-state `resolved` that encoded four outcomes between them.
+    """
+
     reply: str = ""
-    routed_to: Literal["knowledge", "flow", "escalate", "out_of_scope"] | None = None
-    resolved: bool | None = None
+    routed_to: Literal["knowledge", "issue_verification", "escalate", "out_of_scope"] | None = None
+    # What KnowledgeAgent decided. "answer" is a real answer; "clarify" is a question
+    # back to the user; "no_answer" is a miss already logged to the backlog; and
+    # "suspected_bug" says the guides claim the feature works, so the report deserves
+    # verification.
+    knowledge_status: Literal["answer", "clarify", "no_answer", "suspected_bug"] | None = None
+    # What IssueVerificationAgent decided. "user_error" means the feature behaved
+    # correctly and the user needs an explanation, not a ticket.
+    verify_outcome: Literal["need_more_info", "user_error", "bug_confirmed"] | None = None
+    # Why the driver moved the turn here, from `routing.next_step`. Logged on the
+    # step's trace span so a route can be explained without replaying the turn.
+    handoff_reason: str | None = None
     # True when the turn was refused as unrelated to CenLab. Distinct from a plain
-    # resolved=False miss on purpose: a miss escalates to Zalo and writes backlog/QA
+    # knowledge miss on purpose: a miss escalates to Zalo and writes backlog/QA
     # records, which off-topic chatter must never do.
     out_of_scope: bool = False
-    suspected_bug: bool = False
-    evidence_complete: bool = False
     evidence: dict | None = None
     escalated: bool = False
-    new_session: SessionState | None = None
+    # Why the handoff happened ("user requested human", "verified bug", a flow outcome's
+    # reason...). Set wherever `escalated` is set; read by the contact follow-up so the
+    # second CS notification can say which handoff the contact belongs to.
+    escalation_reason: str | None = None
+    # Records the handoff created, so a contact given on a later turn can be attached to
+    # them: {"backlog_id", "mantis_issue_id", "mantis_issue_url"}. Only the verified-bug
+    # path fills this.
+    escalation_refs: dict | None = None
     citations: list[Citation] = Field(default_factory=list)
     # The text of the passages `citations` point at, carried only from KnowledgeAgent to
     # the output guardrail so the grounding judge can see what the answer claimed to be

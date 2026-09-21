@@ -1,6 +1,6 @@
 from agent_customer_support.agents.prompts import (
     TRIAGE_PROMPT,
-    VERIFICATION_PROMPT,
+    ISSUE_VERIFICATION_PROMPT,
     GROUNDING_JUDGE_PROMPT,
     KNOWLEDGE_CONTEXTUALIZE_PROMPT,
     KNOWLEDGE_COMPOSE_PROMPT,
@@ -12,7 +12,7 @@ from agent_customer_support.agents.prompts import (
 def test_prompts_are_nonempty_strings():
     for p in (
         TRIAGE_PROMPT,
-        VERIFICATION_PROMPT,
+        ISSUE_VERIFICATION_PROMPT,
         GROUNDING_JUDGE_PROMPT,
         KNOWLEDGE_CONTEXTUALIZE_PROMPT,
         KNOWLEDGE_COMPOSE_PROMPT,
@@ -28,9 +28,24 @@ def test_triage_is_route_only():
     assert "clarify" not in TRIAGE_PROMPT.lower()
 
 
-def test_compose_has_no_answer_and_bug_markers():
-    assert "[[no_answer]]" in KNOWLEDGE_COMPOSE_PROMPT
-    assert "suspected_bug" in KNOWLEDGE_COMPOSE_PROMPT
+def test_compose_asks_for_every_status_by_name():
+    # The four values of ComposedAnswer.status. A status the prompt never names is
+    # one the model will never choose, and the router would never see.
+    for status in ("answer", "clarify", "no_answer", "suspected_bug"):
+        assert f'"{status}"' in KNOWLEDGE_COMPOSE_PROMPT
+
+
+def test_compose_no_longer_asks_for_control_markers_in_the_prose():
+    # These moved to the `status` field. Leaving them in the prompt would have the
+    # model write them into `answer`, where they would be scrubbed and the status
+    # silently lost.
+    for marker in ("[[clarify]]", "[[no_answer]]", "[[suspected_bug:"):
+        assert marker not in KNOWLEDGE_COMPOSE_PROMPT
+
+
+def test_compose_still_asks_for_image_markers_inline():
+    # Unlike the control markers, these are positional and stay in the prose.
+    assert "[[img:" in KNOWLEDGE_COMPOSE_PROMPT
 
 
 def test_compose_has_no_out_of_scope_marker():
@@ -65,3 +80,22 @@ def test_process_block_is_cacheable():
     assert PROCESS_BLOCK["type"] == "text"
     assert PROCESS_BLOCK["text"] == PROCESS_CONTEXT
     assert PROCESS_BLOCK["cache_control"] == {"type": "ephemeral"}
+
+
+def test_verification_prompt_names_every_slot_and_outcome():
+    from agent_customer_support.models import BugSlots
+
+    for slot in BugSlots.model_fields:
+        assert slot in ISSUE_VERIFICATION_PROMPT, slot
+    for outcome in ("need_more_info", "user_error", "bug_confirmed"):
+        assert outcome in ISSUE_VERIFICATION_PROMPT, outcome
+
+
+def test_verification_prompt_caps_how_much_it_asks_for_at_once():
+    # The whole point of slot filling is asking for a little at a time; a prompt
+    # that dumps the full checklist on the user is how a collection gets abandoned.
+    assert "TỐI ĐA HAI" in ISSUE_VERIFICATION_PROMPT
+
+
+def test_verification_no_longer_uses_the_evidence_ready_marker():
+    assert "evidence_ready" not in ISSUE_VERIFICATION_PROMPT

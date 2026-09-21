@@ -75,3 +75,13 @@ async def test_multiple_attachments_get_distinct_keys():
     a = await st.put(cid, "turn-1", 0, _attachment(b"a" * 32))
     b = await st.put(cid, "turn-1", 1, _attachment(b"b" * 32))
     assert a.s3_key != b.s3_key
+
+
+async def test_get_bytes_returns_what_put_stored():
+    """Server-side read-back: the MantisBT ticket re-attaches screenshots from earlier
+    verification turns, and those only exist as S3 keys on the persisted turn."""
+    st = AttachmentStore()
+    await st.init()
+    raw = os.urandom(3000)
+    stored = await st.put(f"conv-{uuid.uuid4()}", "turn-1", 0, _attachment(raw))
+    assert await st.get_bytes(stored) == raw

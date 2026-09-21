@@ -9,12 +9,11 @@ A Vietnamese-language customer support agent for CenLab cloud software, built as
 The `Coordinator` (`agent_customer_support/agents/coordinator.py`) orchestrates:
 
 1. **Input guardrail** — blocks off-topic/harmful input
-2. **Triage** — routes to `flow`, `escalate`, or `knowledge`
+2. **Triage** — routes to `knowledge`, `issue_verification`, `escalate`, or `out_of_scope`
 3. **Knowledge** — RAG search + LLM answer; may detect a suspected bug
-4. **Verification** — multi-turn evidence collection when a bug is suspected
-5. **Flow** — walks the user through a step/transition/outcome tree (e.g. account recovery)
-6. **Escalation** — posts to a Zalo webhook and returns a handoff reply
-7. **Output guardrail** — replaces hallucinated/out-of-scope replies
+4. **Issue verification** — multi-turn evidence collection when a bug is suspected
+5. **Escalation** — posts to a Zalo webhook and returns a handoff reply
+6. **Output guardrail** — replaces hallucinated/out-of-scope replies
 
 ### LLM layer
 
@@ -24,15 +23,18 @@ The `Coordinator` (`agent_customer_support/agents/coordinator.py`) orchestrates:
 
 | Store | Backend | Purpose |
 |---|---|---|
-| `SessionStore` | Redis | Turn-to-turn state (`active_flow_id`, `pending`, TTL-based) |
+| `SessionStore` | Redis | Turn-to-turn state (`pending`, `pending_context`, TTL-based) |
 | `ConversationStore` | DynamoDB | Full message history |
 | `CustomerRegistry` | DynamoDB | Customer profiles & enabled modules |
 | `FlowStore` | DynamoDB | Flow definitions (seeded via `scripts/import_flows.py`) |
 | `RequestBacklog` | DynamoDB | Bug/feature/how-to records logged on escalation |
 
-### Flows
+### Flows (parked — data layer only)
 
-`models.py` defines `Flow → FlowStep → FlowTransition → FlowOutcome`. `FlowEngine` (`flows/engine.py`) is a pure stateless resolver; `FlowAgent` uses it to advance `session.current_step_id`. Flow JSON files are seeded from `seeds/flows/` via `scripts/import_flows.py`.
+**There is no `FlowAgent`** — it was removed with `SessionState.active_flow_id`, so no flow
+runs in the live pipeline. The data layer is kept: `models.py` defines `Flow → FlowStep →
+FlowTransition → FlowOutcome`, `FlowEngine` (`flows/engine.py`) is a pure stateless
+resolver, and flow JSON is seeded from `seeds/flows/` via `scripts/import_flows.py`.
 
 ### Observability
 
@@ -95,9 +97,9 @@ See `.env-example` for the full list. The important runtime ones:
 ```
 agent_customer_support/
   agent/          # prompt assembly, tool definitions
-  agents/         # coordinator + pipeline agents (triage, knowledge, flow, verification, ...)
+  agents/         # coordinator + pipeline agents (triage, knowledge, issue_verification, ...)
   channels/       # FastAPI routers (widget, admin)
-  flows/          # stateless flow-resolution engine
+  flows/          # stateless flow-resolution engine (parked, no agent uses it)
   llm/            # provider-agnostic LLM facade (Anthropic/OpenAI)
   observability/  # Langfuse tracing
   rag/            # embeddings, QA indexing

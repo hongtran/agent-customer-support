@@ -3,7 +3,8 @@ from unittest.mock import AsyncMock
 from agent_customer_support.agents.knowledge import KnowledgeAgent
 from agent_customer_support.agents.context import TurnContext
 from agent_customer_support.config import get_settings
-from agent_customer_support.llm.schemas import CitedSource, ComposedAnswer
+from agent_customer_support.llm.schemas import CitedSource
+from tests.agents.composed import composed_answer
 from agent_customer_support.models import CustomerProfile, SessionState, Conversation
 
 pytestmark = pytest.mark.asyncio
@@ -34,6 +35,7 @@ def _patch_compose(monkeypatch, agent):
         qa_leads=False,
         other_applications=None,
         selected_applications=None,
+        user_error_hint="",
     ):
         cap["passages"] = passages
         cap["qa_passages"] = qa_passages
@@ -42,7 +44,7 @@ def _patch_compose(monkeypatch, agent):
         # Plain answer, no marker, citing the first passage of each source. Citations
         # now follow what the composer DECLARES, not what retrieval returned, so a test
         # about citations has to say which sources the answer used.
-        return ComposedAnswer(
+        return composed_answer(
             answer="Anh/Chị vui lòng làm theo hướng dẫn.",
             cited=[CitedSource(id="0", section=""), CitedSource(id="qa:0", section="")],
         )

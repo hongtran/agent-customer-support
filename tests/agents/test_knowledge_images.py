@@ -5,6 +5,7 @@ import pytest
 from agent_customer_support.agents.context import TurnContext
 from agent_customer_support.agents.knowledge import KnowledgeAgent
 from agent_customer_support.llm.schemas import CitedSource, ComposedAnswer
+from tests.agents.composed import composed_answer
 from agent_customer_support.models import Conversation, CustomerProfile, SessionState
 
 pytestmark = pytest.mark.asyncio
@@ -51,17 +52,27 @@ def _search_result(passage=PASSAGE, application=SLUG):
     }
 
 
-async def _run(ctx, composed, search=None):
-    """Run KnowledgeAgent with retrieval and composition both stubbed."""
+async def _run(ctx, composed, search=None, status=None):
+    """Run KnowledgeAgent with retrieval and composition both stubbed.
+
+    `composed` may carry control markers, which `composed_answer` turns into the
+    status field. Pass `status` instead to set the field directly and leave the prose
+    exactly as written — what a test about the status field itself needs.
+    """
     ctx.rag.search_with_fallback = AsyncMock(
         return_value=search if search is not None else _search_result()
     )
     ctx.rag.search = AsyncMock(  # qa collection
         return_value={"passages": [], "citations": [], "top_confidence": 0.0}
     )
+    sources = [CitedSource(id="0", section="")]
+    answer = (
+        ComposedAnswer(answer=composed, status=status, application="", cited=sources)
+        if status
+        else composed_answer(answer=composed, cited=sources)
+    )
     with patch(
-        "agent_customer_support.agents.knowledge.complete_structured",
-        return_value=ComposedAnswer(answer=composed, cited=[CitedSource(id="0", section="")]),
+        "agent_customer_support.agents.knowledge.complete_structured", return_value=answer
     ) as llm:
         res = await KnowledgeAgent().run(ctx)
     return res, llm
@@ -132,19 +143,36 @@ async def test_images_are_offered_on_the_suspected_bug_path_too():
     res, _ = await _run(
         ctx, f"Chức năng này đáng lẽ chạy. {SCREEN_MARKER} [[suspected_bug:phong_thi_nghiem]]"
     )
-    assert res.suspected_bug is True
+    assert res.knowledge_status == "suspected_bug"
     assert SCREEN_MARKER in res.reply
     assert "[[suspected_bug" not in res.reply
 
 
 async def test_no_answer_is_still_detected_when_a_marker_inflates_the_reply():
-    """parse_markers treats a long reply plus [[no_answer]] as a spurious hedge. Image
-    markers are ~40 chars each, so counting them could suppress a real miss."""
+    """The hedge rule measures prose only. Image markers are ~40 chars each, so
+    counting them would tip a one-line hedge over the threshold and suppress a real
+    miss. The status is set directly here so the agent's own rule is what is tested."""
     ctx = _ctx(_store({"image23.png"}))
-    res, _ = await _run(ctx, f"Chưa rõ. {SCREEN_MARKER} [[no_answer]]")
-    # first miss asks a clarifying question rather than answering
-    assert res.resolved is None
-    assert ctx.session.pending == "knowledge_clarify"
+    res, _ = await _run(ctx, f"Chưa rõ. {SCREEN_MARKER}", status="no_answer")
+    # A miss, and while clarifying is still allowed that means one question first.
+    assert res.knowledge_status == "clarify"
+
+
+async def test_a_long_answer_that_also_reports_no_answer_is_treated_as_an_answer():
+    """The other half of the hedge rule: real content plus a "no_answer" status is a
+    model hedging, not missing. Trust the content."""
+    ctx = _ctx(_store({"image23.png"}))
+    res, _ = await _run(ctx, "Anh/Chị vui lòng vào menu Mẫu XN. " + "x" * 200, status="no_answer")
+    assert res.knowledge_status == "answer"
+
+
+async def test_a_control_marker_left_in_the_prose_is_scrubbed_and_the_status_wins():
+    """A model told to report status in a field may still write the old marker into
+    the prose. Neither may leak to the user, and the field decides."""
+    ctx = _ctx(_store({"image23.png"}))
+    res, _ = await _run(ctx, "Anh/Chị vui lòng mở màn hình Mẫu XN. [[clarify]]", status="answer")
+    assert res.knowledge_status == "answer"
+    assert "[[clarify]]" not in res.reply
 
 
 async def test_no_store_handle_degrades_to_text_only():

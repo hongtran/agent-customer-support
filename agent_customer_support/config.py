@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     modal_llm_api_key: str = ""
     # knowledge_model: str | None = "openrouter/qwen/qwen3.5-9b"
     knowledge_contextualize_model: str | None = "gpt-5.4-mini"
-    verification_model: str | None = "gpt-5.4-mini"
+    issue_verification_model: str | None = "gpt-5.4-mini"
     flow_model: str | None = "gpt-5.4-mini"
     guardrail_model: str | None = "gpt-5.4-mini"
 
@@ -80,6 +80,33 @@ class Settings(BaseSettings):
     session_ttl_seconds: int = 3600
 
     zalo_cs_webhook_url: str | None = None
+
+    # Bug tickets (MantisBT). Off unless BOTH base_url and api_token are set — the same
+    # opt-in rule as the Zalo webhook. `mantis_project` and `mantis_category` are the
+    # NAMES shown in MantisBT; a category that does not exist in the project is a 400.
+    mantis_base_url: str | None = (
+        "https://ticket.tamducjsc.info"  # e.g. https://mantis.example.com, no trailing slash
+    )
+    mantis_api_token: str | None = None
+    mantis_project: str = "TK_TUVAN"
+    mantis_category: str = "General"
+    # Ceiling on screenshots attached to one ticket (most recent kept), and on the
+    # transcript pasted into additional_information.
+    mantis_max_files: int = 5
+    mantis_max_transcript_chars: int = 20000
+    mantis_timeout_seconds: int = 30
+
+    # CS notification email, sent on every handoff next to the Zalo message (and again
+    # when the user leaves contact details). Off unless BOTH host and recipients are set.
+    # Plain stdlib SMTP: STARTTLS on 587 by default, login only when a username is given.
+    cs_mail_smtp_host: str | None = None
+    cs_mail_smtp_port: int = 587
+    cs_mail_use_tls: bool = True
+    cs_mail_username: str | None = None
+    cs_mail_password: str | None = None
+    cs_mail_from: str = ""
+    cs_mail_to: str = ""  # comma-separated recipients
+    cs_mail_timeout_seconds: int = 15
 
     # Auth. jwt_secret has no usable default on purpose — a shipped signing secret is
     # the same class of bug as no auth at all, so server startup refuses to run without

@@ -1,5 +1,5 @@
 from agent_customer_support.config import get_settings
-from agent_customer_support.models import Conversation, Turn
+from agent_customer_support.models import ContactInfo, Conversation, Turn
 from agent_customer_support.stores.dynamo import ensure_table, get_resource
 
 
@@ -24,6 +24,19 @@ class ConversationStore:
         if not conv.customer_id:
             conv.customer_id = customer_id
         conv.turns.append(turn)
+        async with get_resource() as ddb:
+            table = await ddb.Table(self.table_name)
+            await table.put_item(Item=conv.model_dump(mode="json"))
+
+    async def set_contact(
+        self, conversation_id: str, customer_id: str, contact: ContactInfo
+    ) -> None:
+        """Record the contact the user left after a handoff. Same load-modify-put as
+        `append`, so a row that does not exist yet is created with its customer."""
+        conv = await self.load(conversation_id)
+        if not conv.customer_id:
+            conv.customer_id = customer_id
+        conv.contact = contact
         async with get_resource() as ddb:
             table = await ddb.Table(self.table_name)
             await table.put_item(Item=conv.model_dump(mode="json"))

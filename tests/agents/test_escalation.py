@@ -28,3 +28,20 @@ async def test_escalation_calls_escalator_and_returns_escalated():
     kwargs = escalator.escalate.call_args.kwargs
     assert kwargs["customer_id"] == "c1"
     assert kwargs["reason"] == "user asked"
+
+
+async def test_escalation_forwards_note_to_escalator():
+    escalator = AsyncMock()
+    await EscalationAgent().run(_ctx(escalator), reason="verified bug", note="Ticket: x")
+    assert escalator.escalate.call_args.kwargs["note"] == "Ticket: x"
+
+
+async def test_escalation_without_note_passes_none():
+    escalator = AsyncMock()
+    await EscalationAgent().run(_ctx(escalator), reason="user asked")
+    assert escalator.escalate.call_args.kwargs["note"] is None
+
+
+async def test_escalation_result_names_the_reason():
+    res = await EscalationAgent().run(_ctx(AsyncMock()), reason="knowledge unresolved")
+    assert res.escalation_reason == "knowledge unresolved"

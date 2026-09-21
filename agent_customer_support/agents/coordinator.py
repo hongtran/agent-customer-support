@@ -1,22 +1,37 @@
+import base64
 import logging
 
 from agent_customer_support import doc_images
 from agent_customer_support.agents.context import TurnContext
+from agent_customer_support.applications import to_slug
 from agent_customer_support.agents.escalation import EscalationAgent
-from agent_customer_support.agents.flow import FlowAgent
 from agent_customer_support.agents.guardrail import GuardrailAgent, only_minor, apply_claims
 from agent_customer_support.agents.knowledge import KnowledgeAgent
-from agent_customer_support.agents.prompts import OUT_OF_SCOPE_REPLY
+from agent_customer_support.agents.prompts import (
+    ASK_CONTACT_REPLY,
+    CONTACT_THANKS_REPLY,
+    OUT_OF_SCOPE_REPLY,
+)
 from agent_customer_support.agents.triage import TriageAgent
-from agent_customer_support.agents.verification import IssueVerificationAgent
+from agent_customer_support.agents import routing
+from agent_customer_support.agents.issue_verification import (
+    IssueVerificationAgent,
+    fallback_report,
+)
+from agent_customer_support.config import get_settings
+from agent_customer_support.contact import describe, parse as parse_contact
 from agent_customer_support.escalation import Escalator
+from agent_customer_support.llm.schemas import BugReport
+from agent_customer_support.mantis import MantisClient, MantisFile
 from agent_customer_support.models import (
     AgentResult,
     AttachmentRef,
     ChatResponse,
+    ContactInfo,
     CustomerProfile,
     StoredAttachment,
     Turn,
+    VerifyContext,
 )
 from agent_customer_support.observability import tracing
 from agent_customer_support.rag_client import RagClient
@@ -37,6 +52,35 @@ _BLOCK_REPLY = (
 _FALLBACK_REPLY = "Xin lỗi, mình cần kiểm tra lại thông tin này. Bạn vui lòng hỏi lại sau hoặc yêu cầu gặp nhân viên hỗ trợ."
 
 
+_EVIDENCE_EXT = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
+
+
+def _evidence_name(index: int, media_type: str) -> str:
+    return f"screenshot-{index}.{_EVIDENCE_EXT.get(media_type, 'bin')}"
+
+
+def _with_slots(report: BugReport, verify: VerifyContext) -> BugReport:
+    """Fold the collected slots, and the ones still missing, into the ticket body.
+
+    Naming what is missing is worth as much to the engineer as naming what was
+    collected: a ticket filed at the collection cap then says so on its face, rather
+    than reading like a complete report that happens to be thin.
+    """
+    collected = verify.slots.describe()
+    if verify.has_image:
+        line = "- ảnh chụp màn hình: có (đính kèm)"
+        collected = f"{collected}\n{line}" if collected else line
+    blocks = []
+    if collected:
+        blocks.append(f"Thông tin đã thu thập:\n{collected}")
+    missing = verify.slots.missing()
+    if missing:
+        blocks.append("Thiếu thông tin: " + ", ".join(missing))
+    if not blocks:
+        return report
+    return report.model_copy(update={"summary": report.summary + "\n\n" + "\n\n".join(blocks)})
+
+
 class Coordinator:
     def __init__(self) -> None:
         self.customers = CustomerRegistry()
@@ -49,20 +93,30 @@ class Coordinator:
         self.sessions = SessionStore()
         self.rag = RagClient()
         self.escalator = Escalator()
+        self.mantis = MantisClient()
         self.guardrail = GuardrailAgent()
         self.triage = TriageAgent()
         self.knowledge = KnowledgeAgent()
-        self.flow = FlowAgent()
-        self.verification = IssueVerificationAgent()
+        self.issue_verification = IssueVerificationAgent()
         self.escalation = EscalationAgent()
 
-    async def _traced(self, name: str, run_coro, ctx: TurnContext) -> AgentResult:
+    async def _traced(
+        self, name: str, run_coro, ctx: TurnContext, reason: str | None = None
+    ) -> AgentResult:
         """Run a sub-agent inside a child span (no-op when tracing is off).
 
         `agent_span` also labels every LLM generation made inside with this agent's
         name, which is what makes a Langfuse evaluator targetable at one agent.
+
+        `reason` is why the router sent the turn here. It rides as span metadata so a
+        trace answers "why did this conversation go to verification?" without anyone
+        having to replay it.
         """
-        with tracing.agent_span(name, input={"message": ctx.message}) as sp:
+        with tracing.agent_span(
+            name,
+            input={"message": ctx.message},
+            metadata={"handoff_reason": reason} if reason else None,
+        ) as sp:
             res = await run_coro()
             sp.update(output=res.model_dump(mode="json"))
             return res
@@ -118,16 +172,23 @@ class Coordinator:
             result = await self._route(ctx, session)
 
             # 7. Output guardrail — grounding only, and only for a reply that cited
-            # something. `cited_passages` is empty for every other route (flow,
+            # something. `cited_passages` is empty for every other route (
             # escalation, out_of_scope) and for knowledge replies that cited nothing, so
             # check_output short-circuits there without an LLM call.
             gout = await self.guardrail.check_output(result.reply, result.cited_passages)
             repaired: str | None = None
             if not gout["pass"]:
                 result, repaired = await self._repair_or_escalate(ctx, result, gout)
+            if result.escalated:
+                self._arm_contact_gate(result, session)
             resp = await self._finish(ctx, result, session)
             turn.update(
-                output={"reply": resp.reply, "escalated": resp.escalated, "repaired": repaired}
+                output={
+                    "reply": resp.reply,
+                    "escalated": resp.escalated,
+                    "repaired": repaired,
+                    "path": ctx.route_path,
+                }
             )
             return resp
 
@@ -180,79 +241,328 @@ class Coordinator:
         return result, None
 
     async def _route(self, ctx: TurnContext, session) -> AgentResult:
-        # Resume pending verification
-        if session.pending == "verify_issue":
-            res = await self._traced("verification", lambda: self.verification.run(ctx), ctx)
-            return await self._after_verification(ctx, res, session)
+        """Run steps until one of them ends the turn.
 
-        # Resume pending knowledge clarification: the user is answering our clarify
-        # question (often with a screenshot), so go straight back to knowledge —
-        # bypass triage to keep the loop deterministic and bounded to one attempt.
+        The decision is `routing.next_step`, a pure function over a small snapshot.
+        Everything here is the effects half: running an agent, moving the session
+        counters, and folding what came back into the snapshot the next decision
+        reads. Keeping the two apart is what makes every routing rule testable
+        without a mock, and it is why no agent writes `session.pending` any more —
+        the driver owns the flags it later has to reason about.
+        """
+        contact, refs = self._take_contact(ctx, session)
+        self._maybe_cancel(ctx, session)
+
+        state = routing.RouteState.start(session, contact_found=contact is not None)
+        result = AgentResult()
+        while True:
+            step, reason = routing.next_step(state)
+            ctx.route_path.append(step)
+            if step in routing.TERMINAL:
+                return await self._terminal_step(step, ctx, session, result, reason, contact, refs)
+            result = await self._agent_step(step, ctx, session, result, reason)
+            result.handoff_reason = reason
+            state = state.after(result, session)
+
+    def _take_contact(self, ctx: TurnContext, session) -> tuple[ContactInfo | None, dict]:
+        """Consume the contact gate, if armed, and read what the user left.
+
+        The flag is consumed either way -- asked once, never again -- and a message
+        with no contact in it is simply routed like any other, because it is usually a
+        new question and swallowing it would lose it.
+        """
+        if session.pending != "collect_contact":
+            return None, {}
+        refs = dict(session.pending_context or {})
+        session.pending = None
+        session.pending_context = None
+        parsed = parse_contact(ctx.message)
+        return (parsed if parsed.found else None), refs
+
+    def _maybe_cancel(self, ctx: TurnContext, session) -> None:
+        """Let the user walk away from the flow they are in.
+
+        A regex, never a second triage call: this runs on every turn that has a flow
+        open, and paying for an LLM call to notice "thôi bỏ qua" would be the most
+        expensive way to read two words. Abandoning a flow resets its counters too --
+        the next message is a new topic and must not inherit the old one's budget.
+        """
+        if session.pending not in ("verify_issue", "knowledge_clarify"):
+            return
+        if not routing.wants_cancel(ctx.message):
+            return
+        logger.info("user cancelled pending %s", session.pending)
+        session.pending = None
+        session.pending_context = None
+        session.verify_turns = 0
+        session.clarify_count = 0
+
+    async def _agent_step(
+        self, step: str, ctx: TurnContext, session, prior: AgentResult, reason: str
+    ) -> AgentResult:
+        """Run one non-terminal step. The loop continues after these."""
+        if step == "triage":
+            return await self._traced("triage", lambda: self.triage.run(ctx), ctx, reason)
+        if step == "knowledge":
+            return await self._step_knowledge(ctx, session, prior, reason)
+        if step == "issue_verification":
+            return await self._step_issue_verification(ctx, session, prior, reason)
+        raise AssertionError(f"unroutable step: {step}")
+
+    async def _terminal_step(
+        self,
+        step: str,
+        ctx: TurnContext,
+        session,
+        prior: AgentResult,
+        reason: str,
+        contact: ContactInfo | None,
+        refs: dict,
+    ) -> AgentResult:
+        """Run the step that ends the turn and produce the reply the user sees."""
+        if step == "reply":
+            prior.handoff_reason = reason
+            return prior
+        if step == "out_of_scope":
+            # Refused before any RAG or compose spend. Triage is the single scope gate
+            # by design -- KnowledgeAgent stays scope-free to keep its status logic
+            # simple, so anything triage lets through gets a normal answer attempt.
+            return AgentResult(reply=OUT_OF_SCOPE_REPLY, out_of_scope=True, handoff_reason=reason)
+        if step == "attach_contact":
+            assert contact is not None  # routing only picks this step when one was found
+            res = await self._attach_contact(ctx, session, refs, contact)
+            res.handoff_reason = reason
+            return res
+        if step == "file_ticket":
+            return await self._step_file_ticket(ctx, session, reason)
+        # escalate. The router's reason IS the handoff reason CS reads, so every rule
+        # that gives up on a turn explains itself without a second vocabulary.
+        res = await self._traced(
+            "escalation", lambda: self.escalation.run(ctx, reason=reason), ctx, reason
+        )
+        res.handoff_reason = reason
+        return res
+
+    async def _step_knowledge(
+        self, ctx: TurnContext, session, prior: AgentResult, reason: str
+    ) -> AgentResult:
         if session.pending == "knowledge_clarify":
-            return await self._knowledge_phase(ctx, session)
-
-        # Active flow
-        if session.active_flow_id:
-            return await self._traced("flow", lambda: self.flow.run(ctx), ctx)
-
-        # Triage (route-only)
-        tri = await self._traced("triage", lambda: self.triage.run(ctx), ctx)
-        if tri.routed_to == "flow":
-            return await self._traced("flow", lambda: self.flow.run(ctx), ctx)
-        if tri.routed_to == "escalate":
-            return await self._traced(
-                "escalation", lambda: self.escalation.run(ctx, reason="user requested human"), ctx
-            )
-        # Clearly off-topic: refuse before any RAG or compose spend. Triage is the
-        # single scope gate by design — KnowledgeAgent stays scope-free to keep its
-        # marker logic simple, so anything triage lets through gets a normal answer
-        # attempt (and at worst the no_answer/clarify path).
-        if tri.routed_to == "out_of_scope":
-            return AgentResult(reply=OUT_OF_SCOPE_REPLY, resolved=True, out_of_scope=True)
-
-        return await self._knowledge_phase(ctx, session)
-
-    async def _knowledge_phase(self, ctx: TurnContext, session) -> AgentResult:
-        kn = await self._traced("knowledge", lambda: self.knowledge.run(ctx), ctx)
-        if kn.suspected_bug:
-            session.pending = "verify_issue"
-            session.pending_context = kn.evidence
-            ver = await self._traced("verification", lambda: self.verification.run(ctx), ctx)
-            return await self._after_verification(ctx, ver, session)
-        if kn.resolved is False:
-            return await self._traced(
-                "escalation", lambda: self.escalation.run(ctx, reason="knowledge unresolved"), ctx
-            )
-        # resolved, or a clarify reply (resolved is None) — return as-is.
+            # This turn is the answer to the question we asked, so the flag is spent.
+            session.pending = None
+        if prior.verify_outcome == "user_error":
+            # Verification's own words on what the user did wrong, so the answer can
+            # explain the correct usage instead of starting from nothing.
+            ctx.route_hint = prior.reply
+        allow_clarify = session.clarify_count < routing.MAX_CLARIFY
+        kn = await self._traced(
+            "knowledge",
+            lambda: self.knowledge.run(ctx, allow_clarify=allow_clarify),
+            ctx,
+            reason,
+        )
+        if kn.knowledge_status == "clarify":
+            session.clarify_count += 1
+            session.pending = "knowledge_clarify"
         return kn
 
-    async def _after_verification(self, ctx, res: AgentResult, session) -> AgentResult:
-        if not res.evidence_complete:
-            # Keep pending; session already has pending="verify_issue" set.
-            # Return verification result as-is (new_session=None so _finish uses session).
-            return res
-        # Evidence ready -> log bug + escalate
-        ev = res.evidence or {}
-        await self.backlog.add(
+    async def _step_issue_verification(
+        self, ctx: TurnContext, session, prior: AgentResult, reason: str
+    ) -> AgentResult:
+        if session.pending != "verify_issue":
+            session.pending = "verify_issue"
+            session.pending_context = self._new_verify_context(ctx, prior).model_dump()
+            session.verify_turns = 0
+        res = await self._traced(
+            "issue_verification", lambda: self.issue_verification.run(ctx), ctx, reason
+        )
+        session.verify_turns += 1
+        # The agent hands back the whole merged context, slots included, so the next
+        # turn resumes from what this one learned. Written on every outcome, not only a
+        # complete one -- that omission is why no slot state could survive a turn.
+        if res.evidence:
+            session.pending_context = res.evidence
+        if res.verify_outcome == "user_error":
+            # Not a bug: close the flow, and remember the verdict, so knowledge
+            # suspecting one again reads as a disagreement rather than new evidence.
+            session.user_error_seen = True
+            session.pending = None
+            session.pending_context = None
+            session.verify_turns = 0
+        return res
+
+    def _new_verify_context(self, ctx: TurnContext, prior: AgentResult) -> VerifyContext:
+        """Arm the evidence flow, identically from either way in.
+
+        KnowledgeAgent's suspected_bug result already carries the two keys; a direct
+        triage route has none, so they come from the turn itself. Both land here, so
+        the ticket path downstream cannot tell which route filled it. `application` is
+        a slug, and only when exactly one module is selected, since a ticket cannot
+        name two -- MantisBT renders None as "(không rõ)".
+        """
+        ev = prior.evidence or {}
+        selected = ctx.session.selected_applications or []
+        application = ev.get("application") or (
+            to_slug(selected[0]) if len(selected) == 1 else None
+        )
+        return VerifyContext(
+            application=application,
+            summary=str(ev.get("summary") or ctx.message),
+            # Index the current user turn will get once _finish persists it. The ticket
+            # attaches screenshots from this turn onward only, so an unrelated image
+            # sent earlier in the same conversation never lands on the bug.
+            since_turn=len(ctx.conversation.turns),
+        )
+
+    async def _step_file_ticket(self, ctx: TurnContext, session, reason: str) -> AgentResult:
+        """Ticket, then backlog row, then handoff.
+
+        MantisBT goes first so the backlog row can carry the ticket id in its single
+        put_item; it never raises, so a tracker outage costs the ticket and nothing
+        after it.
+
+        Reached two ways and deliberately identical in both: the verifier said
+        `bug_confirmed`, or the collection hit its turn cap. The cap case has no
+        BugReport of its own, so one is derived from the opening message -- filing a
+        thinner ticket instead of trapping the user is the entire point of the cap.
+        """
+        verify = VerifyContext.model_validate(session.pending_context or {})
+        report = (
+            BugReport.model_validate(verify.report)
+            if verify.report
+            else fallback_report(verify.summary or ctx.message)
+        )
+        report = _with_slots(report, verify)
+        files = await self._evidence_files(ctx, verify.since_turn)
+        issue = await self.mantis.create_issue(
+            report=report,
+            customer_id=ctx.customer.customer_id,
+            customer_name=ctx.customer.name,
+            application=verify.application,
+            transcript=ctx.transcript,
+            files=files,
+        )
+        rec = await self.backlog.add(
             customer_id=ctx.customer.customer_id,
             type="bug",
-            summary=ev.get("summary", "bug"),
-            application=ev.get("application"),
+            summary=report.summary,
+            title=report.title,
+            application=verify.application,
             transcript=ctx.transcript,
+            mantis_issue_id=issue.id if issue else None,
+            mantis_issue_url=issue.url if issue else None,
         )
         session.pending = None
         session.pending_context = None
-        esc = await self._traced(
-            "escalation", lambda: self.escalation.run(ctx, reason="verified bug"), ctx
+        session.verify_turns = 0
+        note = (
+            f"Ticket MantisBT: {issue.url}"
+            if issue
+            else "Ticket MantisBT: KHÔNG tạo được (lỗi kết nối), vui lòng tạo tay."
         )
-        esc.new_session = session
+        esc = await self._traced(
+            "escalation",
+            lambda: self.escalation.run(ctx, reason="verified bug", note=note),
+            ctx,
+            reason,
+        )
+        esc.handoff_reason = reason
+        # So a contact left on the next turn can be attached to what was just filed.
+        esc.escalation_refs = {
+            "backlog_id": rec.id,
+            "mantis_issue_id": issue.id if issue else None,
+            "mantis_issue_url": issue.url if issue else None,
+        }
         return esc
 
+    def _arm_contact_gate(self, result: AgentResult, session) -> None:
+        """Append the contact ask to a handoff reply and remember what it belongs to.
+
+        Runs once per handoff, in handle_turn, so every path that sets `escalated`
+        (triage, knowledge, issue verification and the guardrail fallback) gets the same
+        behaviour without knowing about it. There is exactly one session object per
+        turn -- the driver mutates it in place and `_finish` saves it -- so this writes
+        straight to it.
+        """
+        session.pending = "collect_contact"
+        session.pending_context = {
+            "reason": result.escalation_reason,
+            **(result.escalation_refs or {}),
+        }
+        result.reply = (
+            f"{result.reply}\n\n{ASK_CONTACT_REPLY}" if result.reply else ASK_CONTACT_REPLY
+        )
+
+    async def _attach_contact(
+        self, ctx: TurnContext, session, refs: dict, contact: ContactInfo
+    ) -> AgentResult:
+        """Write the contact onto everything the handoff created, then tell CS again.
+
+        Every step is best-effort and independent: the handoff already went out, so a
+        store or tracker problem here must cost that one update, never the reply or
+        the other updates.
+        """
+        customer_id = ctx.customer.customer_id
+        try:
+            await self.conversations.set_contact(ctx.session.conversation_id, customer_id, contact)
+        except Exception as exc:  # noqa: BLE001 - degrade
+            logger.warning("conversation contact update failed: %s", exc)
+        if refs.get("backlog_id"):
+            try:
+                await self.backlog.set_contact(refs["backlog_id"], contact)
+            except Exception as exc:  # noqa: BLE001 - degrade
+                logger.warning("backlog contact update failed: %s", exc)
+        if refs.get("mantis_issue_id"):
+            # add_note never raises
+            await self.mantis.add_note(
+                refs["mantis_issue_id"],
+                f"Liên hệ khách hàng: {describe(contact)}\n{contact.raw}",
+            )
+        try:
+            await self.escalator.contact_update(
+                customer_id=customer_id,
+                customer_name=ctx.customer.name,
+                reason=refs.get("reason"),
+                contact=contact,
+                ticket_url=refs.get("mantis_issue_url"),
+            )
+        except Exception as exc:  # noqa: BLE001 - degrade
+            logger.warning("CS contact notification failed: %s", exc)
+        return AgentResult(reply=CONTACT_THANKS_REPLY)
+
+    async def _evidence_files(self, ctx: TurnContext, since_turn: int | None) -> list[MantisFile]:
+        """Screenshots for the ticket: earlier issue-verification turns, then the current one.
+
+        Earlier turns hold only S3 keys, so those are read back; the current turn still
+        carries its base64 and costs nothing. Never raises — a screenshot that cannot
+        be read is dropped and the ticket is filed without it. Capped to the most
+        recent `mantis_max_files`, because a long back-and-forth can hold many images
+        and the newest are the ones that made the evidence complete.
+        """
+        start = since_turn if since_turn is not None else len(ctx.conversation.turns)
+        files: list[MantisFile] = []
+        for turn in ctx.conversation.turns[start:]:
+            if turn.role != "user":
+                continue
+            for stored in turn.attachments:
+                try:
+                    raw = await self.attachments.get_bytes(stored)
+                except Exception as exc:  # noqa: BLE001 - one lost screenshot, not the ticket
+                    logger.warning("evidence read failed for %s: %s", stored.s3_key, exc)
+                    continue
+                name = _evidence_name(len(files) + 1, stored.media_type)
+                files.append(MantisFile(name=name, content_b64=base64.b64encode(raw).decode()))
+        for att in ctx.attachments:
+            files.append(
+                MantisFile(
+                    name=_evidence_name(len(files) + 1, att.media_type), content_b64=att.data
+                )
+            )
+        cap = get_settings().mantis_max_files
+        return files[-cap:] if cap > 0 else []
+
     async def _finish(self, ctx: TurnContext, result: AgentResult, session) -> ChatResponse:
-        # Apply session changes: prefer result.new_session if provided, else use session
-        new_session = result.new_session if result.new_session is not None else session
-        new_session.conversation_id = ctx.session.conversation_id
-        await self.sessions.save(new_session)
+        session.conversation_id = ctx.session.conversation_id
+        await self.sessions.save(session)
 
         # Persist turns. The user turn is built first so its id can key the S3 objects.
         user_turn = Turn(role="user", content=ctx.message)
