@@ -144,7 +144,7 @@ async def test_a_flagged_reply_carries_no_citations():
             reply="Anh/Chị vui lòng vào menu Nguyên nhân.",
             knowledge_status="answer",
             citations=[Citation(doc_id="d1", label="Tạo mới biên bản", kind="guide")],
-            cited_passages=["Vào menu Nguyên nhân."],
+            source_passages=["Vào menu Nguyên nhân."],
         )
     )
     c.guardrail.check_output = AsyncMock(return_value={"pass": False, "reason": "bịa nút"})

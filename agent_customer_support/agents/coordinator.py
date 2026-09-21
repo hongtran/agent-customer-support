@@ -5,7 +5,7 @@ from agent_customer_support import doc_images
 from agent_customer_support.agents.context import TurnContext
 from agent_customer_support.applications import to_slug
 from agent_customer_support.agents.escalation import EscalationAgent
-from agent_customer_support.agents.guardrail import GuardrailAgent, only_minor, apply_claims
+from agent_customer_support.agents.guardrail import GuardrailAgent, apply_claims
 from agent_customer_support.agents.knowledge import KnowledgeAgent
 from agent_customer_support.agents.prompts import (
     ASK_CONTACT_REPLY,
@@ -172,10 +172,11 @@ class Coordinator:
             result = await self._route(ctx, session)
 
             # 7. Output guardrail — grounding only, and only for a reply that cited
-            # something. `cited_passages` is empty for every other route (
+            # something; it is then judged against every passage the turn retrieved.
+            # `source_passages` is empty for every other route (flow,
             # escalation, out_of_scope) and for knowledge replies that cited nothing, so
             # check_output short-circuits there without an LLM call.
-            gout = await self.guardrail.check_output(result.reply, result.cited_passages)
+            gout = await self.guardrail.check_output(result.reply, result.source_passages)
             repaired: str | None = None
             if not gout["pass"]:
                 result, repaired = await self._repair_or_escalate(ctx, result, gout)
@@ -212,21 +213,21 @@ class Coordinator:
         where they would vouch for text the user never sees.
         """
         claims = gout.get("unsupported_claims") or []
-        if only_minor(claims):
-            stripped = apply_claims(result.reply, claims)
-            if stripped is not None:
-                logger.info("ungrounded reply repaired in python: %s", gout.get("reason"))
-                result.reply = stripped
-                return result, "python"
-            with tracing.agent_span("knowledge", input={"claims": claims}) as sp:
-                fixed = await self.knowledge.repair(result.reply, claims, result.cited_passages)
-                sp.update(output={"repaired": fixed})
-            if fixed:
-                recheck = await self.guardrail.check_output(fixed, result.cited_passages)
-                if recheck["pass"]:
-                    logger.info("ungrounded reply repaired by llm: %s", gout.get("reason"))
-                    result.reply = fixed
-                    return result, "llm"
+        # if only_minor(claims):
+        stripped = apply_claims(result.reply, claims)
+        if stripped is not None:
+            logger.info("ungrounded reply repaired in python: %s", gout.get("reason"))
+            result.reply = stripped
+            return result, "python"
+        with tracing.agent_span("knowledge", input={"claims": claims}) as sp:
+            fixed = await self.knowledge.repair(result.reply, claims, result.source_passages)
+            sp.update(output={"repaired": fixed})
+        if fixed:
+            recheck = await self.guardrail.check_output(fixed, result.source_passages)
+            if recheck["pass"]:
+                logger.info("ungrounded reply repaired by llm: %s", gout.get("reason"))
+                result.reply = fixed
+                return result, "llm"
         logger.warning("ungrounded reply, escalating: %s", gout.get("reason"))
         # Hand off rather than dead-end. We already know the composed answer cannot be
         # trusted, and the citations belonged to that answer — dropping them keeps a

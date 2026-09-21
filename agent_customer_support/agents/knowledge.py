@@ -277,8 +277,10 @@ class KnowledgeAgent:
             cited=[],
         )
 
-    async def repair(self, reply: str, claims: list[dict], cited_passages: list[str]) -> str | None:
-        """Rewrite `reply` so the flagged minor claims match the sources it cited.
+    async def repair(
+        self, reply: str, claims: list[dict], source_passages: list[str]
+    ) -> str | None:
+        """Rewrite `reply` so the flagged minor claims match this turn's sources.
 
         The second rung of the coordinator's repair ladder: the guardrail found only
         MINOR unsupported claims, and `guardrail.apply_claims` refused to delete them in
@@ -305,7 +307,7 @@ class KnowledgeAgent:
             lines.append(line)
         claims_block = "\n".join(lines)
         content = (
-            f"NGUỒN ĐÃ DẪN:\n{_passages_block(cited_passages)}"
+            f"NGUỒN:\n{_passages_block(source_passages)}"
             f"\n\nCÂU TRẢ LỜI:\n{reply}"
             f"\n\nÝ THIẾU CĂN CỨ:\n{claims_block}"
             f"\n\n{KNOWLEDGE_REPAIR_INSTRUCTION}"
@@ -458,7 +460,13 @@ class KnowledgeAgent:
         # declared id we cannot resolve is dropped rather than shown, because a citation
         # the user cannot check is worse than no citation at all.
         citations = cite.select(composed.cited, cite_catalog, passages, qa_passages)
-        cited_passages = cite.passages_for(composed.cited, cite_catalog, passages, qa_passages)
+        # The grounding judge sees EVERY passage this turn retrieved, not only the cited
+        # ones: a composer that cites the wrong chunk, or forgets one it used, would
+        # otherwise get correct claims flagged. The gate is unchanged — the judge runs
+        # only when the answer cited at least one real passage (not the process block,
+        # not an invented id); every other answer still skips the call.
+        cited_any = cite.passages_for(composed.cited, cite_catalog, passages, qa_passages)
+        source_passages = [*passages, *qa_passages] if cited_any else []
 
         if status == "suspected_bug":
             return AgentResult(
@@ -466,7 +474,7 @@ class KnowledgeAgent:
                 knowledge_status="suspected_bug",
                 evidence={"application": application or None, "summary": ctx.message},
                 citations=citations,
-                cited_passages=cited_passages,
+                source_passages=source_passages,
             )
 
         # Clarify / confirm before answering. The composer judged that an element it
@@ -482,7 +490,7 @@ class KnowledgeAgent:
                 reply=clean,
                 knowledge_status="answer",
                 citations=citations,
-                cited_passages=cited_passages,
+                source_passages=source_passages,
             )
 
         if status != "no_answer":
@@ -490,7 +498,7 @@ class KnowledgeAgent:
                 reply=clean,
                 knowledge_status="answer",
                 citations=citations,
-                cited_passages=cited_passages,
+                source_passages=source_passages,
             )
 
         # Miss. While we may still clarify, try to disambiguate before giving up to a

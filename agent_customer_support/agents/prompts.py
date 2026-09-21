@@ -303,33 +303,62 @@ OUT_OF_SCOPE_REPLY = (
 GROUNDING_JUDGE_PROMPT = """Bạn kiểm tra CĂN CỨ của một câu trả lời trợ lý CenLab.
 Bạn nhận: (1) QUY TRÌNH ở đầu system, (2) các NGUỒN mà câu trả lời đã dẫn, (3) CÂU TRẢ LỜI.
 
-Nhiệm vụ DUY NHẤT: mọi KHẲNG ĐỊNH trong câu trả lời có được hai nguồn trên hỗ trợ không?
-- grounded=true khi mọi khẳng định về thao tác/nút/màn hình/trình tự/điều kiện/phân quyền đều
-  suy ra, suy luận logic được từ QUY TRÌNH hoặc từ các NGUỒN đã dẫn.
-- grounded=false khi có khẳng định cụ thể KHÔNG có trong nguồn nào. Với mỗi khẳng định đó:
-  span chép NGUYÊN VĂN từ câu trả lời, vừa đủ để replacement thành câu đúng ngữ pháp;
-  replacement là span sau khi bỏ ý thiếu căn cứ — CHỈ dùng lại các từ có trong span theo đúng
-  thứ tự (được bỏ từ, sửa dấu câu/viết hoa), TUYỆT ĐỐI không thêm từ mới; rỗng nếu xóa hẳn.
-  Ví dụ: span "theo dõi Mã ký số/trạng thái và kiểm tra thông báo hệ thống trước khi xử lý
-  tiếp" → replacement "theo dõi Mã ký số/trạng thái trước khi xử lý tiếp".
+MỤC TIÊU: chỉ chặn lỗi có thể làm người dùng THAO TÁC SAI hoặc HIỂU SAI phần mềm.
+Không bắt lỗi từng chữ.
+
+Nhiệm vụ DUY NHẤT: tìm các khẳng định KHÔNG được QUY TRÌNH hoặc NGUỒN hỗ trợ và phân loại mức độ.
+Đánh giá theo Ý, không theo TỪ: một câu có căn cứ nếu ý chính suy ra được từ nguồn, dù có thêm
+từ nối, từ bổ nghĩa chung chung, hoặc diễn đạt khác.
+
+severity="major" — khẳng định cụ thể người dùng sẽ làm theo nhưng KHÔNG có trong nguồn:
+- tên menu, tab, nút, màn hình, trường dữ liệu, trạng thái không có trong nguồn;
+- bước thao tác mới, hoặc sai thứ tự so với nguồn;
+- điều kiện, giới hạn, phân quyền, giá trị, số liệu, công thức không có trong nguồn;
+- mô tả hành vi/kết quả của hệ thống trái với nguồn hoặc không có trong nguồn;
+- khẳng định một tính năng có/không có mà nguồn không nói.
+
+severity="minor" — từ/cụm từ thêm vào nhưng KHÔNG đổi thao tác và KHÔNG thêm dữ kiện mới, ví dụ:
+- từ bổ nghĩa chung: "đã được cấu hình", "theo quy trình", "trên hệ thống", "tương ứng",
+  "phù hợp", "nếu cần";
+- câu tóm tắt, câu nối, câu gộp các bước đã có trong nguồn;
+- tổng quát hóa nhẹ từ nội dung nguồn.
+
+Khi phân vân: "Nếu xóa cụm này, người dùng có thao tác khác đi không?"
+Không → minor. Có → major.
+
+KẾT LUẬN:
+- grounded=false CHỈ KHI có ít nhất một khẳng định severity="major".
+- Chỉ có minor hoặc không có gì → grounded=true (vẫn liệt kê minor trong unsupported_claims).
+
+Với mỗi khẳng định liệt kê: span chép NGUYÊN VĂN từ câu trả lời, vừa đủ để replacement thành câu
+đúng ngữ pháp; replacement là span sau khi bỏ ý thiếu căn cứ — CHỈ dùng lại các từ có trong span
+theo đúng thứ tự (được bỏ từ, sửa dấu câu/viết hoa), TUYỆT ĐỐI không thêm từ mới; rỗng nếu xóa hẳn.
+
+Ví dụ:
+- Trả lời: "thực hiện theo loại nhập kết quả đã được cấu hình"; nguồn chỉ nêu hai cách nhập kết quả.
+  → "đã được cấu hình" là minor (không đổi thao tác). grounded=true.
+- Trả lời: "bấm nút Duyệt nhanh ở góc phải"; nguồn không có nút này → major. grounded=false.
+- Trả lời: "LOD phải nhỏ hơn 0.5"; nguồn không nêu giá trị này → major. grounded=false.
+- Trả lời: "theo dõi Mã ký số/trạng thái và kiểm tra thông báo hệ thống trước khi xử lý tiếp";
+  nguồn không nói kiểm tra thông báo → major (thêm một bước thao tác);
+  replacement "theo dõi Mã ký số/trạng thái trước khi xử lý tiếp".
+
 KHÔNG đánh giá: văn phong, độ dài, mức độ lịch sự, có đúng phạm vi CenLab hay không, có nên hỏi
 lại hay không. Những việc đó thuộc khâu khác.
-KHÔNG coi là thiếu căn cứ:
+KHÔNG coi là thiếu căn cứ (không liệt kê):
 - token hình ảnh [[img:screen:...]] / [[img:icon:...]] — đây là ảnh thật từ tài liệu, hệ thống tự render;
 - câu hướng dẫn liên hệ quản trị hệ thống/admin (phân quyền, master data, cấu hình giao diện,
   mất dữ liệu, thêm/bớt tính năng) — đây là chính sách định tuyến cố định của hệ thống;
-- lời chào, câu dẫn, câu hỏi lại, hoặc câu nêu rõ giả định/điều kiện, ví dụ, giải thích, diễn giải, kí hiệu suy luận như: ->
-Diễn đạt lại bằng lời khác nhưng đúng ý nguồn thì VẪN là có căn cứ.
-
-grounded=true → unsupported_claims rỗng.
+- lời chào, câu dẫn, câu hỏi lại, câu nêu rõ giả định/điều kiện, ví dụ, giải thích, diễn giải,
+  kí hiệu suy luận như: ->
 """
 
 # System text for KnowledgeAgent.repair: the guardrail flagged a reply with only MINOR
 # unsupported claims that `guardrail.apply_claims` could not delete safely (a whole
 # sentence, a span it could not find exactly once). The model gets the same sources the
-# answer cited and a list of the flagged spans; it may delete or reword, never add.
+# judge saw (every passage the turn retrieved) and a list of the flagged spans; it may delete or reword, never add.
 KNOWLEDGE_REPAIR_PROMPT = """Bạn sửa lại một câu trả lời của trợ lý CenLab để mọi ý đều khớp với NGUỒN.
-Bạn nhận: QUY TRÌNH ở đầu system, các NGUỒN mà câu trả lời đã dẫn, CÂU TRẢ LỜI, và danh sách
+Bạn nhận: QUY TRÌNH ở đầu system, các NGUỒN đã tìm được cho câu hỏi, CÂU TRẢ LỜI, và danh sách
 các Ý THIẾU CĂN CỨ (chép nguyên văn từ câu trả lời, kèm lý do).
 
 Quy tắc:

@@ -16,8 +16,8 @@ def _minor(span: str, reason: str = "Nguồn không nêu", replacement: str = ""
     return {"span": span, "replacement": replacement, "severity": "minor", "reason": reason}
 
 
-def _critical(span: str, reason: str = "Sai nút") -> dict:
-    return {"span": span, "replacement": "", "severity": "critical", "reason": reason}
+def _major(span: str, reason: str = "Sai nút") -> dict:
+    return {"span": span, "replacement": "", "severity": "major", "reason": reason}
 
 
 async def test_empty_input_blocked():
@@ -46,7 +46,7 @@ async def test_ungrounded_reply_is_flagged_with_per_claim_severity():
             grounded=False,
             unsupported_claims=[
                 UnsupportedClaim(
-                    span="nút Xuất Excel", replacement="", severity="critical", reason="bịa nút"
+                    span="nút Xuất Excel", replacement="", severity="major", reason="bịa nút"
                 ),
                 UnsupportedClaim(
                     span="Đang sử dụng, ", replacement="", severity="minor", reason="thừa"
@@ -59,7 +59,7 @@ async def test_ungrounded_reply_is_flagged_with_per_claim_severity():
     # The reasons are joined so the log line and the eval CSV still read as one string.
     assert res["reason"] == "bịa nút | thừa"
     assert res["unsupported_claims"] == [
-        {"span": "nút Xuất Excel", "replacement": "", "severity": "critical", "reason": "bịa nút"},
+        {"span": "nút Xuất Excel", "replacement": "", "severity": "major", "reason": "bịa nút"},
         {"span": "Đang sử dụng, ", "replacement": "", "severity": "minor", "reason": "thừa"},
     ]
 
@@ -74,7 +74,7 @@ async def test_grounded_reply_passes():
     assert res["pass"] is True
 
 
-async def test_no_cited_passages_skips_the_judge():
+async def test_no_source_passages_skips_the_judge():
     """Nothing to judge against, so no call at all.
 
     This is the common case, not an edge one: every non-knowledge route and every
@@ -119,8 +119,8 @@ def test_only_minor_is_false_on_an_empty_list():
     assert only_minor([]) is False
 
 
-def test_only_minor_is_false_when_any_claim_is_critical():
-    assert only_minor([_minor("a"), _critical("b")]) is False
+def test_only_minor_is_false_when_any_claim_is_major():
+    assert only_minor([_minor("a"), _major("b")]) is False
 
 
 def test_only_minor_is_true_when_every_claim_is_minor():
@@ -146,8 +146,8 @@ def test_apply_claims_tidies_the_whitespace_left_behind():
     assert out == "Nhấn Lưu, rồi thoát màn hình."
 
 
-def test_apply_claims_refuses_a_critical_claim():
-    assert apply_claims(_REPLY, [_critical("Đang sử dụng, ")]) is None
+def test_apply_claims_refuses_a_major_claim():
+    assert apply_claims(_REPLY, [_major("Đang sử dụng, ")]) is None
 
 
 def test_apply_claims_refuses_a_span_not_in_the_reply():

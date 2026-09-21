@@ -269,7 +269,7 @@ def _flagged_coord(claims: list[dict]):
             reply=_ANSWER,
             knowledge_status="answer",
             citations=_CITED,
-            cited_passages=["Vào menu Phiếu yêu cầu."],
+            source_passages=["Vào menu Phiếu yêu cầu."],
         )
     )
     c.knowledge.repair = AsyncMock(return_value=None)

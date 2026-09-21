@@ -553,7 +553,7 @@ async def test_no_scope_note_without_a_selection_to_contrast_against():
 # ---- citations: what the answer declared, validated against what was retrieved ----
 
 
-async def _run_with_cited(cited, metas=None):
+async def _run_with_cited(cited, metas=None, qa=None):
     ctx = _ctx()
     ctx.rag.search_with_fallback = AsyncMock(
         return_value={
@@ -567,7 +567,7 @@ async def _run_with_cited(cited, metas=None):
             ],
         }
     )
-    ctx.rag.search = AsyncMock(return_value={"passages": [], "citations": [], "metas": []})
+    ctx.rag.search = AsyncMock(return_value=qa or {"passages": [], "citations": [], "metas": []})
     with _composed("Anh/Chị vui lòng vào menu X." + "y" * 200, cited=cited):
         return await KnowledgeAgent().run(ctx)
 
@@ -576,7 +576,23 @@ async def test_only_declared_sources_are_cited():
     """Not everything retrieved. Two passages came back and the answer used one."""
     res = await _run_with_cited(["1"])
     assert [c.doc_id for c in res.citations] == ["d2"]
-    assert res.cited_passages == ["p1"]
+
+
+async def test_the_judge_sees_every_retrieved_passage_once_one_is_cited():
+    """Citations list only what was declared, but the grounding judge gets everything
+    retrieved — guides and Q&A — so a wrong or missing citation cannot get a correct
+    claim flagged."""
+    qa = {"passages": ["cs answer"], "citations": [], "metas": [], "top_confidence": 0.1}
+    res = await _run_with_cited(["1"], qa=qa)
+    assert [c.doc_id for c in res.citations] == ["d2"]
+    assert res.source_passages == ["p0", "p1", "cs answer"]
+
+
+async def test_an_invented_id_alone_does_not_open_the_judge():
+    """The gate is a real cited passage. An id the catalog does not hold is not one."""
+    res = await _run_with_cited(["9"])
+    assert res.citations == []
+    assert res.source_passages == []
 
 
 async def test_an_invented_index_never_reaches_the_result():
@@ -592,9 +608,9 @@ async def test_a_process_only_answer_shows_no_source_at_all():
     The declaration still happens — it just does not reach the reply."""
     res = await _run_with_cited(["quy_trinh_chung"])
     assert res.citations == []
-    # Empty cited_passages is also what makes the guardrail skip this turn: there is no
+    # Empty source_passages is also what makes the guardrail skip this turn: there is no
     # passage to judge a process answer against.
-    assert res.cited_passages == []
+    assert res.source_passages == []
 
 
 async def test_a_clarify_reply_cites_nothing_it_did_not_use():
@@ -603,7 +619,7 @@ async def test_a_clarify_reply_cites_nothing_it_did_not_use():
     with _composed("Bạn muốn tạo loại phiếu nào? [[clarify]]", cited=[]):
         res = await KnowledgeAgent().run(ctx)
     assert res.citations == []
-    assert res.cited_passages == []
+    assert res.source_passages == []
 
 
 async def test_a_miss_carries_no_citations():
