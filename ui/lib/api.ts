@@ -304,3 +304,62 @@ export async function updateCustomer(id: string, patch: CustomerPatch): Promise<
   if (!r.ok) throw new Error(`update customer failed: ${r.status}`);
   return r.json();
 }
+
+/* ---------------------------------------------- admin: conversations */
+
+/** One row of a customer's conversation list. */
+export interface ConversationSummary {
+  conversation_id: string;
+  /** The first user message, cut short. */
+  title: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  turn_count: number;
+}
+
+export interface ConversationPage {
+  items: ConversationSummary[];
+  /** Pass back to get the next page; null on the last page. */
+  next_cursor: string | null;
+}
+
+/**
+ * A stored turn, ready to render. User images come as presigned URLs in
+ * `attachments`; guide images are already `![screen](url)` inside `content`.
+ * Both URLs expire — reopen the conversation to re-sign them.
+ */
+export interface ConversationTurn {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  ts: string;
+  attachments: AttachmentRef[];
+}
+
+export interface ConversationDetail {
+  conversation_id: string;
+  customer_id: string;
+  turns: ConversationTurn[];
+}
+
+export async function listCustomerConversations(
+  customerId: string,
+  cursor?: string | null,
+): Promise<ConversationPage> {
+  const qs = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+  const r = await request(`/admin/customers/${encodeURIComponent(customerId)}/conversations${qs}`);
+  if (r.status === 404) throw new Error(`Không tìm thấy khách hàng "${customerId}"`);
+  if (!r.ok) throw new Error(`list conversations failed: ${r.status}`);
+  return r.json();
+}
+
+export async function getCustomerConversation(
+  customerId: string,
+  conversationId: string,
+): Promise<ConversationDetail> {
+  const r = await request(
+    `/admin/customers/${encodeURIComponent(customerId)}/conversations/${encodeURIComponent(conversationId)}`,
+  );
+  if (!r.ok) throw new Error(`get conversation failed: ${r.status}`);
+  return r.json();
+}

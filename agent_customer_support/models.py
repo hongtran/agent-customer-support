@@ -151,6 +151,9 @@ class ContactInfo(BaseModel):
 # ---- Conversation ----
 
 
+CONVERSATION_TITLE_CHARS = 120
+
+
 class Turn(BaseModel):
     id: str = Field(default_factory=lambda: uuid4().hex)
     role: Literal["user", "assistant"]
@@ -166,6 +169,37 @@ class Conversation(BaseModel):
     citations: list[str] = Field(default_factory=list)
     # Left by the user after a handoff (see Coordinator._attach_contact). None until then.
     contact: ContactInfo | None = None
+    # Summary for the admin list, derived from `turns` by `refresh_summary` on every
+    # write. `customer_id` + `updated_at` key the table's by-customer index, so
+    # `updated_at` must never be written as null — DynamoDB rejects a NULL index key.
+    title: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    turn_count: int = 0
+
+    def refresh_summary(self) -> None:
+        """Recompute the summary fields from `turns`. The one place they are derived,
+        so the store and the backfill script cannot disagree."""
+        self.turn_count = len(self.turns)
+        first_user = next((t.content for t in self.turns if t.role == "user"), None)
+        if first_user is not None:
+            self.title = first_user.strip()[:CONVERSATION_TITLE_CHARS]
+        if self.turns:
+            self.created_at = self.turns[0].ts
+            self.updated_at = self.turns[-1].ts
+        else:
+            self.created_at = self.created_at or _now()
+            self.updated_at = _now()
+
+
+class ConversationSummary(BaseModel):
+    """One row of the admin conversation list: the index projection, no turns."""
+
+    conversation_id: str
+    title: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    turn_count: int = 0
 
 
 # ---- Request backlog ----

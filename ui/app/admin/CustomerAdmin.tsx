@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import {
   Customer,
   Role,
@@ -324,6 +325,12 @@ export default function CustomerAdmin() {
             <div className="mx-auto max-w-3xl space-y-4">
               <div className="flex items-center gap-2">
                 <RoleBadge role={sel.role} />
+                <Link
+                  href={`/admin/customers/${encodeURIComponent(sel.customer_id)}`}
+                  className="ml-auto text-xs font-medium text-blue-600 hover:text-blue-700"
+                >
+                  Xem hội thoại →
+                </Link>
               </div>
               <h2 className="text-lg font-semibold text-gray-900">
                 {sel.name}

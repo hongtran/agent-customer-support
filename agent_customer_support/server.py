@@ -4,6 +4,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from agent_customer_support.channels.widget import router as widget_router, get_agent
 from agent_customer_support.channels.admin import router as admin_router
+from agent_customer_support.channels.admin_conversations import (
+    router as admin_conversations_router,
+)
 from agent_customer_support.channels.admin_customers import router as admin_customers_router
 from agent_customer_support.channels.auth import router as auth_router
 from agent_customer_support.channels.deps import get_qa_indexer
@@ -71,6 +74,7 @@ app.include_router(auth_router)
 app.include_router(widget_router)
 app.include_router(admin_router)
 app.include_router(admin_customers_router)
+app.include_router(admin_conversations_router)
 
 
 @app.get("/health")
