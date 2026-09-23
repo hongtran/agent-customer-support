@@ -13,7 +13,7 @@ _REASONING_EFFORT_BY_ENV: dict[str, ReasoningEffort] = {"dev": "low", "prod": "h
 # On reasoning models the cap covers reasoning tokens *plus* visible output, so it
 # has to sit well above the old 5000 — otherwise a high-effort turn can burn the
 # whole budget on reasoning and return empty text.
-_MAX_OUTPUT_TOKENS_BY_ENV: dict[str, int] = {"dev": 4000, "prod": 8000}
+_MAX_OUTPUT_TOKENS_BY_ENV: dict[str, int] = {"dev": 4000, "prod": 10000}
 
 
 class Settings(BaseSettings):
