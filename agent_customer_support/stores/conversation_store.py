@@ -6,9 +6,8 @@ from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
 from agent_customer_support.config import get_settings
-from agent_customer_support.stores.dynamo import ensure_table, get_resource
-from agent_customer_support.models import Conversation, ConversationSummary, Turn, ContactInfo
 from agent_customer_support.stores.dynamo import get_resource
+from agent_customer_support.models import Conversation, ConversationSummary, Turn, ContactInfo
 
 # Lists one customer's conversations, newest first, without scanning the table. Sparse:
 # a row with no `updated_at` (written before this index existed) is not in it until
@@ -119,6 +118,7 @@ class ConversationStore:
         async with get_resource() as ddb:
             table = await ddb.Table(self.table_name)
             await table.put_item(Item=conv.model_dump(mode="json"))
+
     async def list_by_customer(
         self, customer_id: str, limit: int = 50, cursor: str | None = None
     ) -> tuple[list[ConversationSummary], str | None]:

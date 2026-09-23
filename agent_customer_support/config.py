@@ -97,13 +97,11 @@ class Settings(BaseSettings):
     mantis_timeout_seconds: int = 30
 
     # CS notification email, sent on every handoff next to the Zalo message (and again
-    # when the user leaves contact details). Off unless BOTH host and recipients are set.
-    # Plain stdlib SMTP: STARTTLS on 587 by default, login only when a username is given.
-    cs_mail_smtp_host: str | None = None
-    cs_mail_smtp_port: int = 587
-    cs_mail_use_tls: bool = True
-    cs_mail_username: str | None = None
-    cs_mail_password: str | None = None
+    # when the user leaves contact details), through Resend's HTTP API. Off unless the
+    # API key, the sender and the recipients are all set. `cs_mail_from` must be on a
+    # domain verified in Resend, or Resend rejects the send.
+    resend_api_key: str | None = None
+    resend_api_url: str = "https://api.resend.com/emails"
     cs_mail_from: str = ""
     cs_mail_to: str = ""  # comma-separated recipients
     cs_mail_timeout_seconds: int = 15

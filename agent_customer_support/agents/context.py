@@ -32,6 +32,10 @@ class TurnContext:
     # The steps this turn actually went through, appended by Coordinator._route. Read
     # only by the root trace span, so a route can be seen at a glance in Langfuse.
     route_path: list[str] = field(default_factory=list)
+    # Screenshots from earlier verification turns, read back from S3 by the coordinator
+    # so IssueVerificationAgent can still read them. The current turn's own images stay
+    # in `attachments`. Empty outside issue verification.
+    evidence_images: list[Attachment] = field(default_factory=list)
 
     def as_messages(self) -> list[dict]:
         """Multi-turn message list from conversation history + current plain-text message.

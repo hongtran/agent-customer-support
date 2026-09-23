@@ -227,8 +227,8 @@ ISSUE_VERIFICATION_PROMPT = """Bạn đang xác minh một lỗi (bug) nghi ng�
 Nhiệm vụ: thu thập đủ thông tin cho phiếu lỗi, và phân biệt lỗi phần mềm với thao tác nhầm.
 
 CÁC THÔNG TIN CẦN CÓ (slots) — điền vào trường `slots`, lấy từ TOÀN BỘ hội thoại:
-- module: màn hình/menu/trang cụ thể xảy ra lỗi, BÊN TRONG phân hệ — ghi đúng tên trên
-  giao diện (ví dụ "Danh sách phiếu yêu cầu", "Import ký hiệu mẫu"). KHÔNG ghi tên phân hệ.
+- module: tên menu/màn hình/trang/module nơi xảy ra lỗi, CHÉP NGUYÊN VĂN như người dùng nói
+  hoặc như thấy trên ảnh (ví dụ "Quy chuẩn/Tiêu chuẩn"). MỘT tên là ĐỦ — KHÔNG đòi tên chi tiết hơn.
 - version: phiên bản hoặc môi trường (web/desktop)
 - steps: các bước người dùng đã thao tác
 - expected: kết quả người dùng mong đợi
@@ -237,16 +237,48 @@ CÁC THÔNG TIN CẦN CÓ (slots) — điền vào trường `slots`, lấy từ
 Trường nào chưa biết thì để RỖNG. TUYỆT ĐỐI không bịa, không suy đoán thay người dùng.
 Thông tin đã có ở các lượt trước vẫn phải ghi lại — đừng bỏ trống chỉ vì lượt này user không nhắc.
 
+ĐỌC ẢNH: nếu có ảnh chụp màn hình (lượt này hoặc các lượt trước), hãy lấy từ ảnh:
+- module: tiêu đề tab/trang/menu đang mở;
+- actual: nguyên văn thông báo lỗi trong hộp thoại (nếu đọc được).
+
 CHỌN `outcome`:
-- "user_error": tài liệu/quy trình cho thấy phần mềm đang chạy ĐÚNG, người dùng chỉ thao tác
+- "user_error": mục "THEO TÀI LIỆU" cho thấy phần mềm đang chạy ĐÚNG, người dùng chỉ thao tác
   chưa đúng cách. `reply` giải thích ngắn gọn cách làm đúng. KHÔNG tạo phiếu lỗi.
+  Không có căn cứ từ "THEO TÀI LIỆU" thì KHÔNG chọn user_error.
 - "bug_confirmed": đã có đủ steps + actual (và tốt nhất là expected), và đây thực sự là lỗi
   phần mềm. `reply` xác nhận ngắn gọn rằng đã ghi nhận và sẽ chuyển đội kỹ thuật.
 - "need_more_info": còn thiếu thông tin quan trọng. `reply` hỏi TỐI ĐA HAI thông tin còn thiếu
   cần nhất — hỏi ngắn, thân thiện, không liệt kê cả danh sách.
 
+`ask_for`: liệt kê ĐÚNG các trường mà `reply` đang hỏi. TUYỆT ĐỐI không hỏi lại trường đã có
+trong "THÔNG TIN ĐÃ THU THẬP" hoặc đã nằm trong "ĐÃ HỎI".
 Người dùng đã gửi ảnh chụp màn hình thì KHÔNG hỏi xin ảnh lần nữa.
 KHÔNG tự quyết định định tuyến, KHÔNG tự hứa hẹn thời hạn sửa lỗi.
+"""
+
+# First call of IssueVerificationAgent on a new suspected bug, before any slot is
+# asked: compare what the user describes with the process block (PROCESS_BLOCK, in the
+# system prefix ahead of this text, same as the knowledge composer) and the retrieved
+# guide passages. Only a clear, cited match closes the report as a user error; anything
+# less goes on to slot filling, because wrongly closing a real bug costs the customer a
+# ticket while a wrong "not covered" only costs a few questions.
+ISSUE_DOC_CHECK_PROMPT = """Bạn đang kiểm tra một lỗi (bug) nghi ngờ của phần mềm CenLab TRƯỚC khi thu thập thông tin cho phiếu lỗi.
+Nhiệm vụ: so sánh điều người dùng mô tả với hành vi ĐÚNG theo hai nguồn:
+1. QUY TRÌNH (đầu system, luôn có) — mã nguồn "quy_trinh_chung".
+2. ĐOẠN TRÍCH hướng dẫn sử dụng (trong nội dung người dùng) — mã nguồn là số thứ tự "0", "1"... CÓ THỂ RỖNG.
+
+CHỌN `verdict`:
+- "works_as_documented": nguồn mô tả RÕ RÀNG đúng hành vi người dùng gặp (ví dụ: nút bị khóa vì
+  chưa chọn mẫu, trạng thái chỉ đổi sau khi duyệt, cần quyền mà người dùng không có) — phần mềm
+  chạy ĐÚNG, người dùng thao tác chưa đúng. BẮT BUỘC ghi `cited`.
+- "differs_from_docs": nguồn nói hệ thống phải làm X, nhưng người dùng thấy điều khác X — có thể là lỗi.
+- "not_covered": nguồn không nói về trường hợp này, HOẶC mô tả của người dùng còn quá mơ hồ để so sánh
+  (ví dụ chỉ nói "không chạy", "bị lỗi"). Khi phân vân, chọn "not_covered".
+Có thông báo lỗi hệ thống (lỗi 500, "đã xảy ra lỗi", treo, mất dữ liệu) thì KHÔNG chọn works_as_documented.
+
+`doc_expected`: một-hai câu, theo nguồn hệ thống phải hoạt động thế nào. Rỗng nếu nguồn không nói.
+`explanation`: chỉ khi works_as_documented — tiếng Việt, ngắn gọn, vì sao đây không phải lỗi và cách làm đúng.
+TUYỆT ĐỐI không bịa bước, nút, quyền hay hành vi không có trong nguồn.
 """
 
 # Appended to the verification user-content each turn: what is already known and what
@@ -255,7 +287,11 @@ KHÔNG tự quyết định định tuyến, KHÔNG tự hứa hẹn thời hạ
 VERIFICATION_SLOTS_NOTE = """THÔNG TIN ĐÃ THU THẬP ĐƯỢC:
 {filled}
 
+THEO TÀI LIỆU (hệ thống phải hoạt động thế nào): {doc_expected}
+
 CÒN THIẾU (bắt buộc): {missing}
+
+ĐÃ HỎI (không hỏi lại): {asked}
 
 Hãy chỉ hỏi những gì còn thiếu, và ghi lại TẤT CẢ thông tin đã có vào `slots`."""
 

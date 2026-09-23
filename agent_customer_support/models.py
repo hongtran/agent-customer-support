@@ -281,9 +281,13 @@ _SLOT_LABELS: dict[str, str] = {
     "occurred_at": "thời điểm xảy ra",
 }
 
+# The slot names as a type, for `VerificationDecision.ask_for`. Must match the keys of
+# `_SLOT_LABELS`; a test keeps the two in sync.
+SlotName = Literal["module", "version", "steps", "expected", "actual", "occurred_at"]
+
 # What a ticket has to say to be worth an engineer's time. The other three slots are
 # useful, never blocking -- a version number is not worth losing the report over.
-_REQUIRED_SLOTS = ("steps", "expected", "actual")
+_REQUIRED_SLOTS = ("module", "actual", "steps")
 
 
 class BugSlots(BaseModel):
@@ -316,11 +320,15 @@ class BugSlots(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    # Deliberately loose. An earlier wording demanded a name "inside" the application
+    # and not the application itself; the model then read "Quy chuẩn/Tiêu chuẩn" as a
+    # parent area, left the slot empty, and asked for the screen name every turn.
     module: str = Field(
         description=(
-            "Màn hình/menu/trang cụ thể xảy ra lỗi, BÊN TRONG phân hệ — tên đúng như "
-            "trên giao diện (ví dụ: 'Danh sách phiếu yêu cầu', 'Import ký hiệu mẫu'). "
-            "KHÔNG phải tên phân hệ. Rỗng nếu chưa biết."
+            "Tên menu/màn hình/trang/module nơi xảy ra lỗi, CHÉP NGUYÊN VĂN như người dùng "
+            "nói hoặc như thấy trên ảnh chụp (ví dụ: 'Quy chuẩn/Tiêu chuẩn', 'Danh sách "
+            "phiếu yêu cầu'). MỘT tên là ĐỦ — không đòi tên chi tiết hơn. Rỗng nếu chưa "
+            "có tên nào."
         )
     )
     version: str = Field(description="Phiên bản hoặc môi trường (web/desktop). Rỗng nếu chưa biết.")
@@ -351,9 +359,13 @@ class BugSlots(BaseModel):
             }
         )
 
+    def missing_slots(self) -> list[str]:
+        """Names of the required slots still empty, for code that reasons about them."""
+        return [n for n in _REQUIRED_SLOTS if not getattr(self, n).strip()]
+
     def missing(self) -> list[str]:
         """Labels of the required slots still empty, for the ticket's own note."""
-        return [_SLOT_LABELS[n] for n in _REQUIRED_SLOTS if not getattr(self, n).strip()]
+        return [_SLOT_LABELS[n] for n in self.missing_slots()]
 
     def describe(self) -> str:
         """The filled slots as a readable block for the ticket body."""
@@ -385,7 +397,20 @@ class VerifyContext(BaseModel):
     since_turn: int = 0
     slots: BugSlots = Field(default_factory=BugSlots.empty)
     has_image: bool = False
+    # The ask-once guard (IssueVerificationAgent._guard). `asked_last` is what the
+    # previous reply asked for, so this turn's message can be read as the answer to it;
+    # `ask_counts` is every slot ever asked, so none is asked twice.
+    asked_last: list[str] = Field(default_factory=list)
+    ask_counts: dict[str, int] = Field(default_factory=dict)
     report: dict | None = None
+    # The doc check (IssueVerificationAgent._doc_check) runs once per bug, before any
+    # slot is asked. `query` is KnowledgeAgent's contextualized search query when the
+    # bug came from there (empty on a direct triage route); `doc_expected` is what the
+    # guides say should happen, kept as short text so later turns and the ticket can
+    # use it without storing whole passages in Redis.
+    query: str = ""
+    doc_checked: bool = False
+    doc_expected: str = ""
 
 
 class SessionState(BaseModel):

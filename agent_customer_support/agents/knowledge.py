@@ -4,6 +4,7 @@ import re
 from qdrant_client.http.exceptions import ApiException
 
 from agent_customer_support.agents.context import TurnContext
+from agent_customer_support.agents.passages import passages_block
 from agent_customer_support.agents.prompts import (
     KNOWLEDGE_CONTEXTUALIZE_PROMPT,
     KNOWLEDGE_CONTEXTUALIZE_VISION_PROMPT,
@@ -95,32 +96,6 @@ def _resolve_status(composed: ComposedAnswer) -> tuple[str, str, str]:
     if status == "no_answer" and len(doc_images.strip(clean)) > 80:
         status = "answer"
     return clean, status, (composed.application or "").strip()
-
-
-def _passages_block(passages: list[str], with_sections: bool = False) -> str:
-    """Number the passages for the composer, optionally listing each one's headings.
-
-    The heading list turns "name the section you used" from a guess into a choice from a
-    closed set. Without it the model reaches for whatever looks most like a title, which
-    in this corpus is the summary line prepended to every chunk — not a heading at all,
-    so the declaration fails validation and the citation loses its section.
-
-    Reuses `cite.sections`, the same function `cite.select` validates the answer against.
-    Sharing that call is the point: the list the model reads and the whitelist it is
-    judged by cannot drift apart.
-
-    A passage with no headings gets no annotation rather than an empty one, and the Q&A
-    block never asks for annotation — CS records are authored prose and carry no headings.
-    """
-    out = []
-    for i, p in enumerate(passages):
-        head = f"[{i}]"
-        if with_sections:
-            names = cite.sections(p)
-            if names:
-                head = f"{head} (các mục trong đoạn này: {' | '.join(names)})\n"
-        out.append(f"{head} {p}")
-    return "\n\n".join(out)
 
 
 def _other_applications(metas: list[dict], selected: list[str] | None) -> list[str]:
@@ -220,7 +195,7 @@ class KnowledgeAgent:
             history = ""
         content = (
             f"{history}Câu hỏi hiện tại: {question}\n\n"
-            f"Đoạn trích:\n{_passages_block(passages, with_sections=True)}"
+            f"Đoạn trích:\n{passages_block(passages, with_sections=True)}"
         )
         if qa_passages:
             header = (
@@ -228,7 +203,7 @@ class KnowledgeAgent:
                 if qa_leads
                 else "ĐÁP ÁN CS XÁC NHẬN — bổ trợ:"
             )
-            content = f"{content}\n\n{header}\n{_passages_block(qa_passages)}"
+            content = f"{content}\n\n{header}\n{passages_block(qa_passages)}"
             compose_prompt = KNOWLEDGE_COMPOSE_PROMPT_WITH_QA
         else:
             compose_prompt = KNOWLEDGE_COMPOSE_PROMPT
@@ -307,7 +282,7 @@ class KnowledgeAgent:
             lines.append(line)
         claims_block = "\n".join(lines)
         content = (
-            f"NGUỒN:\n{_passages_block(source_passages)}"
+            f"NGUỒN:\n{passages_block(source_passages)}"
             f"\n\nCÂU TRẢ LỜI:\n{reply}"
             f"\n\nÝ THIẾU CĂN CỨ:\n{claims_block}"
             f"\n\n{KNOWLEDGE_REPAIR_INSTRUCTION}"
@@ -472,7 +447,13 @@ class KnowledgeAgent:
             return AgentResult(
                 reply=clean,
                 knowledge_status="suspected_bug",
-                evidence={"application": application or None, "summary": ctx.message},
+                # `query` is the contextualized one: the verifier's doc check searches
+                # the guides again, and this retrieves better than the raw message.
+                evidence={
+                    "application": application or None,
+                    "summary": ctx.message,
+                    "query": query,
+                },
                 citations=citations,
                 source_passages=source_passages,
             )

@@ -183,14 +183,61 @@ inside it — the menu, screen or page the user was on ("Danh sách phiếu yêu
 only ever appears in the ticket body. Merging them into one field would scope a
 retrieval to a screen name, which matches nothing in the corpus.
 
-**Python is the memory, not the model.** Prior turns reach the model as plain text and
-prior screenshots not at all, so a slot the model leaves empty means "nothing new this
-turn", never "forget that": `BugSlots.merge` fills empty slots from what the session
-held and lets a non-empty value win, so the user can still correct themselves. Whether
-a screenshot ever arrived is tracked as `VerifyContext.has_image`, which is also why it
-is not a slot. The merged context is written back to `pending_context` on **every**
-outcome — the old not-ready branch returned no evidence at all, which is why no slot
-state could survive a turn.
+**Python is the memory, not the model.** Prior turns reach the model as plain text, so
+a slot the model leaves empty means "nothing new this turn", never "forget that":
+`BugSlots.merge` fills empty slots from what the session held and lets a non-empty
+value win, so the user can still correct themselves. Whether a screenshot ever arrived
+is tracked as `VerifyContext.has_image`, which is also why it is not a slot. The merged
+context is written back to `pending_context` on **every** outcome — the old not-ready
+branch returned no evidence at all, which is why no slot state could survive a turn.
+
+**Earlier screenshots are shown again.** An image used to reach the model only on the
+turn it was sent, so a screen name or an error dialog the model missed then was lost
+for good. `_step_issue_verification` now reads the screenshots sent **since the start of
+the conversation** (turn 0, not `since_turn` — the error screenshot often arrives with the
+question Knowledge answered before the bug was suspected) back from S3
+(`Coordinator._stored_images`, shared with the ticket's `_evidence_files`) and passes the
+newest two as `ctx.evidence_images`; the agent attaches them to the slots note, leaving
+the user's own message untouched. The ticket still takes only images since `since_turn`.
+Every verification turn therefore pays an S3 read per earlier screenshot, and the
+confirming turn reads the in-range ones twice (verifier, then ticket), which was left as
+is rather than cached.
+
+**A slot is asked at most once, in code.** A prompt alone did not hold this: in a live
+conversation the model asked for the screen name three turns running after the user had
+given it twice, because the old `module` wording ("inside the application, not the
+application") made it treat "Quy chuẩn/Tiêu chuẩn" as a parent area. The model now also
+returns `ask_for` — which slots its reply asks about — and `_guard` in
+`issue_verification.py` enforces the rest, tracking `VerifyContext.asked_last` and
+`ask_counts`:
+- a slot we asked for last turn that the model still left empty is **filled with the
+  user's message as written** (max 200 chars) — the message is the answer, the model
+  just failed to read it. Known limit: an off-topic reply lands in the slot (a cancel
+  phrase never gets here, `routing.wants_cancel` drops the flow first);
+- a slot that is filled, or was asked once, is removed from `ask_for`, and if anything
+  was removed the reply is rebuilt from `_SLOT_QUESTIONS`, so it cannot ask it anyway;
+- while collecting: all required slots filled → `bug_confirmed`; everything the model
+  asked was filtered and a required slot is still empty → one canned question for it,
+  or `bug_confirmed` if each was already asked. A reply that asks for no slot at all (a
+  screenshot) is left alone.
+The guard trusts `ask_for`: a reply that asks for a slot without declaring it cannot be
+seen, and the 4-turn cap is still the last stop.
+
+**The docs are checked before any slot is asked.** On the first verification turn
+(`VerifyContext.doc_checked`), `_doc_check` searches the guides with the same scope
+rules as Knowledge (`search_with_fallback`, query = Knowledge's contextualized `query`
+when the bug came from there, else the user's words) and makes one structured call
+(`DocCheck`, traced as `llm.issue_verification.doc_check`) with `PROCESS_BLOCK` in the
+system prefix and the passages numbered by `agents/passages.passages_block` — the same
+sources and form the composer reads. `works_as_documented` with a cited id we actually
+offered (a passage index or `quy_trinh_chung`) returns `user_error` at once; an invented
+id, an empty explanation or a `None` parse falls through to slot filling, because
+closing a real bug as a user error is the costly mistake. The model is called even with
+no passages, since the process block alone can show the behavior is correct. Whatever
+the verdict, `doc_expected` (what the docs say should happen, short text — never the
+passages) is kept in `pending_context`: later turns read it in `VERIFICATION_SLOTS_NOTE`
+("THEO TÀI LIỆU"), which is the only ground the slot-filling call has for a later
+`user_error`, and `_with_slots` prints it in the ticket body.
 
 **Three outcomes, and only one files a ticket.** `user_error` means the software
 behaved correctly, so the turn goes back to Knowledge with the verifier's explanation in
@@ -251,8 +298,9 @@ touched and the message is routed normally, because it is usually a new question
 `ContactInfo.raw` keeps the whole message so CS also sees "gọi sau 5h chiều". Nothing is
 written to `CustomerProfile`.
 
-`mailer.py` (`CSMailer`) is the email side: stdlib `smtplib` in a thread, off unless
-`CS_MAIL_SMTP_HOST` and `CS_MAIL_TO` are set, never raises. `Escalator.escalate` posts to
+`mailer.py` (`CSMailer`) is the email side: Resend's HTTP API (`POST /emails`) over
+httpx, off unless `RESEND_API_KEY`, `CS_MAIL_FROM` and `CS_MAIL_TO` are set, never raises
+(a rejected send is logged with Resend's own `message`, e.g. an unverified `from` domain). `Escalator.escalate` posts to
 Zalo (still raises on an HTTP error) and then mails; the mail is sent even with no Zalo
 webhook, and carries the full transcript where Zalo is capped at 3000 chars.
 
@@ -483,7 +531,7 @@ See `.env-example`. The important runtime ones:
   Anyone holding it can mint an admin token for any customer. `JWT_EXPIRE_MINUTES` (default 480)
   is the token lifetime; there is no refresh token, so a token is valid until it expires.
 - `MANTIS_BASE_URL` / `MANTIS_API_TOKEN` / `MANTIS_PROJECT` — bug tickets; off unless the first two are set
-- `CS_MAIL_SMTP_HOST` / `CS_MAIL_TO` (+ `CS_MAIL_USERNAME`, `CS_MAIL_PASSWORD`, `CS_MAIL_FROM`) — CS notification email; off unless host and recipients are set
+- `RESEND_API_KEY` / `CS_MAIL_FROM` / `CS_MAIL_TO` — CS notification email via Resend; off unless all three are set. `CS_MAIL_FROM` must be on a domain verified in Resend
 - `LANGFUSE_*` — optional tracing; leave blank to disable
 - `DYNAMODB_ENDPOINT_URL` — set to `http://localhost:8000` for local dev
 - `S3_ENDPOINT_URL` / `S3_BUCKET_ATTACHMENTS` — attachment storage; `http://localhost:4566` for LocalStack. `MAX_ATTACHMENT_BYTES` (default 5 MB) is the upload cap, `S3_PRESIGN_EXPIRY_SECONDS` (default 1h) the display-URL lifetime.

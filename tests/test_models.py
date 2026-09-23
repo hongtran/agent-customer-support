@@ -1,5 +1,6 @@
 from agent_customer_support.models import (
     BugSlots,
+    SlotName,
     VerifyContext,
     Flow,
     FlowStep,
@@ -125,10 +126,11 @@ def test_merge_lets_a_new_value_correct_an_old_one():
 
 
 def test_missing_names_only_the_required_slots():
-    assert _slots(steps="s", expected="e", actual="a").missing() == []
-    # version and occurred_at are useful, never blocking.
-    assert _slots(steps="s", expected="e", actual="a", version="").missing() == []
-    assert "kết quả mong đợi" in _slots(steps="s", actual="a").missing()
+    assert _slots(module="Quy chuẩn/Tiêu chuẩn", actual="a").missing() == []
+    # The other slots are useful, never blocking.
+    assert _slots(module="m", actual="a", steps="", version="").missing() == []
+    assert "màn hình/menu" in _slots(actual="a").missing()
+    assert _slots(actual="a").missing_slots() == ["module"]
 
 
 def test_describe_lists_only_what_was_filled():
@@ -170,3 +172,16 @@ def test_verify_context_loads_a_row_written_before_slots_existed():
 def test_verify_context_ignores_keys_it_does_not_know():
     v = VerifyContext.model_validate({"summary": "s", "something_old": 1})
     assert v.summary == "s"
+
+
+def test_slot_name_matches_the_slots():
+    import typing
+
+    assert set(typing.get_args(SlotName)) == set(BugSlots.model_fields)
+
+
+def test_verify_context_loads_a_row_written_before_the_ask_guard_existed():
+    v = VerifyContext.model_validate(
+        {"summary": "s", "since_turn": 2, "slots": BugSlots.empty().model_dump()}
+    )
+    assert v.asked_last == [] and v.ask_counts == {}

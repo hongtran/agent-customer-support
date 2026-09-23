@@ -25,6 +25,7 @@ from agent_customer_support.llm.schemas import BugReport
 from agent_customer_support.mantis import MantisClient, MantisFile
 from agent_customer_support.models import (
     AgentResult,
+    Attachment,
     AttachmentRef,
     ChatResponse,
     ContactInfo,
@@ -52,6 +53,9 @@ _BLOCK_REPLY = (
 _FALLBACK_REPLY = "Xin lỗi, mình cần kiểm tra lại thông tin này. Bạn vui lòng hỏi lại sau hoặc yêu cầu gặp nhân viên hỗ trợ."
 
 
+# Earlier screenshots re-shown to the verifier each turn.
+_MAX_PRIOR_IMAGES = 2
+
 _EVIDENCE_EXT = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
 
 
@@ -73,6 +77,10 @@ def _with_slots(report: BugReport, verify: VerifyContext) -> BugReport:
     blocks = []
     if collected:
         blocks.append(f"Thông tin đã thu thập:\n{collected}")
+    # What the guides say should happen, next to what the user saw: the engineer can
+    # tell at a glance whether the ticket is a real deviation.
+    if verify.doc_expected.strip():
+        blocks.append(f"Theo tài liệu: {verify.doc_expected.strip()}")
     missing = verify.slots.missing()
     if missing:
         blocks.append("Thiếu thông tin: " + ", ".join(missing))
@@ -373,6 +381,11 @@ class Coordinator:
             session.pending = "verify_issue"
             session.pending_context = self._new_verify_context(ctx, prior).model_dump()
             session.verify_turns = 0
+        # Earlier screenshots, so the verifier can still read them. From the start of
+        # the conversation, not only since the bug was suspected: the user often sends
+        # the error screenshot with the question that Knowledge answered first. Capped
+        # because each one is paid for in image tokens.
+        ctx.evidence_images = (await self._stored_images(ctx, 0))[-_MAX_PRIOR_IMAGES:]
         res = await self._traced(
             "issue_verification", lambda: self.issue_verification.run(ctx), ctx, reason
         )
@@ -408,6 +421,7 @@ class Coordinator:
         return VerifyContext(
             application=application,
             summary=str(ev.get("summary") or ctx.message),
+            query=str(ev.get("query") or ""),
             # Index the current user turn will get once _finish persists it. The ticket
             # attaches screenshots from this turn onward only, so an unrelated image
             # sent earlier in the same conversation never lands on the bug.
@@ -539,27 +553,42 @@ class Coordinator:
         recent `mantis_max_files`, because a long back-and-forth can hold many images
         and the newest are the ones that made the evidence complete.
         """
+        files = [
+            MantisFile(name=_evidence_name(i, att.media_type), content_b64=att.data)
+            for i, att in enumerate(
+                [*await self._stored_images(ctx, since_turn), *ctx.attachments], start=1
+            )
+        ]
+        cap = get_settings().mantis_max_files
+        return files[-cap:] if cap > 0 else []
+
+    async def _stored_images(self, ctx: TurnContext, since_turn: int | None) -> list[Attachment]:
+        """Screenshots the user sent on earlier turns since `since_turn`, read back from S3.
+
+        Shared by the ticket (`_evidence_files`) and the verifier, which is re-shown
+        them each turn so a screen name or an error dialog can still be read after the
+        turn it arrived on. User turns only. Never raises — a screenshot that cannot be
+        read is dropped, and the ticket or the turn goes on without it.
+        """
         start = since_turn if since_turn is not None else len(ctx.conversation.turns)
-        files: list[MantisFile] = []
+        images: list[Attachment] = []
         for turn in ctx.conversation.turns[start:]:
             if turn.role != "user":
                 continue
             for stored in turn.attachments:
                 try:
                     raw = await self.attachments.get_bytes(stored)
-                except Exception as exc:  # noqa: BLE001 - one lost screenshot, not the ticket
+                except Exception as exc:  # noqa: BLE001 - one lost screenshot, not the turn
                     logger.warning("evidence read failed for %s: %s", stored.s3_key, exc)
                     continue
-                name = _evidence_name(len(files) + 1, stored.media_type)
-                files.append(MantisFile(name=name, content_b64=base64.b64encode(raw).decode()))
-        for att in ctx.attachments:
-            files.append(
-                MantisFile(
-                    name=_evidence_name(len(files) + 1, att.media_type), content_b64=att.data
+                images.append(
+                    Attachment(
+                        kind="image",
+                        media_type=stored.media_type,
+                        data=base64.b64encode(raw).decode(),
+                    )
                 )
-            )
-        cap = get_settings().mantis_max_files
-        return files[-cap:] if cap > 0 else []
+        return images
 
     async def _finish(self, ctx: TurnContext, result: AgentResult, session) -> ChatResponse:
         session.conversation_id = ctx.session.conversation_id

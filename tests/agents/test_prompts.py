@@ -99,3 +99,20 @@ def test_verification_prompt_caps_how_much_it_asks_for_at_once():
 
 def test_verification_no_longer_uses_the_evidence_ready_marker():
     assert "evidence_ready" not in ISSUE_VERIFICATION_PROMPT
+
+
+def test_verification_prompt_reads_the_screenshot_and_declares_what_it_asks():
+    assert "ĐỌC ẢNH" in ISSUE_VERIFICATION_PROMPT
+    assert "ask_for" in ISSUE_VERIFICATION_PROMPT
+
+
+def test_the_module_slot_no_longer_demands_a_name_below_the_application():
+    # That wording made the model treat "Quy chuẩn/Tiêu chuẩn" as a parent area and
+    # ask for the screen name every turn.
+    from agent_customer_support.models import BugSlots
+
+    description = BugSlots.model_fields["module"].description or ""
+    for text in (ISSUE_VERIFICATION_PROMPT, description):
+        assert "KHÔNG phải tên phân hệ" not in text
+        assert "KHÔNG ghi tên phân hệ" not in text
+    assert "MỘT tên là ĐỦ" in description

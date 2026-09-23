@@ -12,7 +12,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from agent_customer_support.models import BugSlots
+from agent_customer_support.models import BugSlots, SlotName
 
 
 class TriageDecision(BaseModel):
@@ -243,5 +243,57 @@ class VerificationDecision(BaseModel):
         description=(
             "Toàn bộ thông tin đã thu thập được cho đến lúc này, lấy từ CẢ hội thoại. "
             "Để rỗng từng trường chưa biết — KHÔNG bịa."
+        )
+    )
+    # Required, empty when the reply asks nothing. This is what lets Python see which
+    # slots were asked about without reading the reply text.
+    ask_for: list[SlotName] = Field(
+        description=(
+            "ĐÚNG các trường mà `reply` đang hỏi người dùng (tối đa hai). Rỗng nếu "
+            "`reply` không hỏi gì."
+        )
+    )
+
+
+class DocCheck(BaseModel):
+    """IssueVerificationAgent's first look at a suspected bug: what do the docs say?
+
+    Runs once, before any slot is asked for. The verifier used to rule `user_error`
+    with no document in front of it -- the prompt said "the docs show it works" while
+    the model had only the chat. This call puts the process block and the retrieved
+    guide passages in front of it and asks one question: does the software behave the
+    way the user describes because that is how it is documented to behave?
+
+    `cited` is checked in code against the ids actually offered, the same guard as
+    `ComposedAnswer.cited`: a user error the model cannot point at a source for is
+    treated as not covered, so an invented id can never close a real bug.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    verdict: Literal["works_as_documented", "differs_from_docs", "not_covered"] = Field(
+        description=(
+            '"works_as_documented": nguồn mô tả RÕ RÀNG đúng hành vi người dùng gặp — '
+            "phần mềm chạy đúng, người dùng thao tác chưa đúng. "
+            '"differs_from_docs": hành vi người dùng mô tả KHÁC với nguồn — có thể là lỗi. '
+            '"not_covered": nguồn không nói về trường hợp này, hoặc mô tả còn quá mơ hồ.'
+        )
+    )
+    doc_expected: str = Field(
+        description=(
+            "Một-hai câu: theo nguồn, hệ thống PHẢI hoạt động thế nào trong trường hợp "
+            "này. Rỗng nếu nguồn không nói."
+        )
+    )
+    explanation: str = Field(
+        description=(
+            "Chỉ khi works_as_documented: giải thích ngắn vì sao đây không phải lỗi và "
+            "cách làm đúng. Rỗng trong các trường hợp khác."
+        )
+    )
+    cited: list[str] = Field(
+        description=(
+            'Mã nguồn dùng để kết luận: số thứ tự đoạn trích ("0", "1"...) hoặc '
+            '"quy_trinh_chung" cho phần quy trình. Rỗng nếu không dựa vào nguồn nào.'
         )
     )

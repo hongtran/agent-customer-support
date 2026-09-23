@@ -393,9 +393,9 @@ _REPORT = {
 
 
 def _verified_bug_coord(*, since_turn: int = 2):
-    """A conversation where the bug was suspected at turn index 2: an unrelated
-    screenshot before it (turn 0) must NOT reach the ticket; the one sent during
-    verification (turn 4) must."""
+    """A conversation where the bug was suspected at turn index 2: a screenshot before
+    it (turn 0) is shown to the verifier but must NOT reach the ticket; the one sent
+    during verification (turn 4) must."""
     c = _coord()
     c.conversations.load.return_value = Conversation(
         conversation_id="cv1",
@@ -459,8 +459,10 @@ async def test_verified_bug_files_ticket_with_evidence_then_logs_and_escalates()
         ("screenshot-1.jpg", "azEtYnl0ZXM="),
         ("screenshot-2.png", "QUJD"),
     ]
-    c.attachments.get_bytes.assert_awaited_once()
-    assert c.attachments.get_bytes.call_args.args[0].s3_key == "k1.jpg"
+    # The verifier reads from the start of the conversation (old.png included); the
+    # ticket reads only from since_turn, so old.png is read once and never filed.
+    keys = [c.args[0].s3_key for c in c.attachments.get_bytes.await_args_list]
+    assert sorted(keys) == ["k1.jpg", "k1.jpg", "old.png"]
 
     bk = c.backlog.add.call_args.kwargs
     assert bk["type"] == "bug"
@@ -516,8 +518,8 @@ async def test_the_ticket_body_names_what_was_collected_and_what_is_missing():
     summary = c.mantis.create_issue.call_args.kwargs["report"].summary
     assert "1. Bấm Import" in summary
     assert "ảnh chụp màn hình: có" in summary
-    # `expected` was never filled, and the ticket says so rather than reading complete.
-    assert "Thiếu thông tin: kết quả mong đợi" in summary
+    # `module` was never filled, and the ticket says so rather than reading complete.
+    assert "Thiếu thông tin: màn hình/menu" in summary
 
 
 async def test_evidence_read_failure_drops_that_file_only():
@@ -1070,3 +1072,91 @@ async def test_the_route_is_recorded_for_the_trace(monkeypatch):
     monkeypatch.setattr(coord_mod.tracing, "trace", fake_trace)
     await _turn(c)
     assert seen["output"]["path"] == ["triage", "knowledge", "reply"]
+
+
+# ---- earlier screenshots are re-shown to the verifier ----
+
+
+def _resume_coord(turns, since_turn=0):
+    c = _coord()
+    c.conversations.load.return_value = Conversation(
+        conversation_id="cv1", customer_id="c1", turns=turns
+    )
+    c.sessions.get.return_value = SessionState(
+        conversation_id="cv1",
+        pending="verify_issue",
+        pending_context={"summary": "A lỗi", "since_turn": since_turn},
+    )
+    c.issue_verification.run = AsyncMock(
+        return_value=AgentResult(reply="còn thiếu gì", verify_outcome="need_more_info")
+    )
+    c.attachments.get_bytes = AsyncMock(side_effect=lambda st: st.s3_key.encode())
+    return c
+
+
+async def test_earlier_screenshots_reach_the_verifier_newest_two_only():
+    c = _resume_coord(
+        [
+            Turn(role="user", content="hỏi cũ", attachments=[_stored("old.png")]),
+            Turn(role="assistant", content="đáp cũ"),
+            Turn(role="user", content="lỗi đây", attachments=[_stored("a.png"), _stored("b.png")]),
+            Turn(role="assistant", content="menu nào?"),
+            Turn(role="user", content="thêm ảnh", attachments=[_stored("c.png")]),
+            Turn(role="assistant", content="còn gì?"),
+        ],
+        since_turn=2,
+    )
+    await _turn(c)
+    ctx = c.issue_verification.run.call_args.args[0]
+    # Read from the start of the conversation, capped to the newest two.
+    decoded = [base64.b64decode(a.data).decode() for a in ctx.evidence_images]
+    assert decoded == ["b.png", "c.png"]
+
+
+async def test_a_screenshot_sent_before_the_bug_was_suspected_reaches_the_verifier():
+    c = _resume_coord(
+        [
+            Turn(role="user", content="hỏi cũ", attachments=[_stored("old.png")]),
+            Turn(role="assistant", content="đáp cũ"),
+            Turn(role="user", content="vẫn lỗi"),
+            Turn(role="assistant", content="menu nào?"),
+        ],
+        since_turn=2,
+    )
+    await _turn(c)
+    ctx = c.issue_verification.run.call_args.args[0]
+    assert [base64.b64decode(a.data).decode() for a in ctx.evidence_images] == ["old.png"]
+
+
+async def test_a_screenshot_that_cannot_be_read_is_dropped_and_the_turn_still_answers():
+    c = _resume_coord(
+        [Turn(role="user", content="lỗi", attachments=[_stored("a.png"), _stored("b.png")])]
+    )
+
+    async def flaky(st):
+        if st.s3_key == "a.png":
+            raise RuntimeError("s3 down")
+        return b"b"
+
+    c.attachments.get_bytes = AsyncMock(side_effect=flaky)
+    res = await _turn(c)
+    assert res.reply == "còn thiếu gì"
+    ctx = c.issue_verification.run.call_args.args[0]
+    assert [base64.b64decode(a.data) for a in ctx.evidence_images] == [b"b"]
+
+
+async def test_the_first_verification_turn_sees_earlier_screenshots():
+    c = _coord()
+    c.conversations.load.return_value = Conversation(
+        conversation_id="cv1",
+        customer_id="c1",
+        turns=[Turn(role="user", content="hỏi cũ", attachments=[_stored("old.png")])],
+    )
+    c.triage.run = AsyncMock(return_value=AgentResult(routed_to="issue_verification"))
+    c.issue_verification.run = AsyncMock(
+        return_value=AgentResult(reply="menu nào?", verify_outcome="need_more_info")
+    )
+    c.attachments.get_bytes = AsyncMock(side_effect=lambda st: st.s3_key.encode())
+    await _turn(c)
+    ctx = c.issue_verification.run.call_args.args[0]
+    assert [base64.b64decode(a.data).decode() for a in ctx.evidence_images] == ["old.png"]
