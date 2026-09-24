@@ -20,15 +20,9 @@ def _ctx(message, session=None) -> TurnContext:
     )
 
 
-async def test_active_flow_routes_to_flow_without_llm():
-    s = SessionState(conversation_id="cv1", active_flow_id="f1", current_step_id="s1")
-    res = await TriageAgent().run(_ctx("ok rồi", s))
-    assert res.action == "route" and res.routed_to == "flow"
-
-
 async def test_explicit_human_request_routes_escalate():
     res = await TriageAgent().run(_ctx("cho tôi gặp nhân viên"))
-    assert res.action == "route" and res.routed_to == "escalate"
+    assert res.routed_to == "escalate"
 
 
 async def test_ambiguous_message_still_routes_to_knowledge():
@@ -39,7 +33,7 @@ async def test_ambiguous_message_still_routes_to_knowledge():
         return_value=TriageDecision(target="knowledge"),
     ):
         res = await TriageAgent().run(_ctx("phần mềm có vấn đề"))
-    assert res.action == "route" and res.routed_to == "knowledge"
+    assert res.routed_to == "knowledge"
 
 
 async def test_clear_intent_routes_knowledge():
@@ -48,7 +42,7 @@ async def test_clear_intent_routes_knowledge():
         return_value=TriageDecision(target="knowledge"),
     ):
         res = await TriageAgent().run(_ctx("cách tạo phiếu yêu cầu thử nghiệm?"))
-    assert res.action == "route" and res.routed_to == "knowledge"
+    assert res.routed_to == "knowledge"
 
 
 async def test_triage_passes_full_history_on_followup():
@@ -86,7 +80,7 @@ async def test_no_decision_falls_back_to_knowledge():
     Knowledge is the fail-safe: cheapest route, and the most reversible."""
     with patch("agent_customer_support.agents.triage.complete_structured", return_value=None):
         res = await TriageAgent().run(_ctx("phần mềm có vấn đề"))
-    assert res.action == "route" and res.routed_to == "knowledge"
+    assert res.routed_to == "knowledge"
 
 
 async def test_escalate_decision_is_honoured():
@@ -95,7 +89,7 @@ async def test_escalate_decision_is_honoured():
         return_value=TriageDecision(target="escalate"),
     ):
         res = await TriageAgent().run(_ctx("việc này quá phức tạp"))
-    assert res.action == "route" and res.routed_to == "escalate"
+    assert res.routed_to == "escalate"
 
 
 async def test_off_topic_routes_out_of_scope():
@@ -104,4 +98,21 @@ async def test_off_topic_routes_out_of_scope():
         return_value=TriageDecision(target="out_of_scope"),
     ):
         res = await TriageAgent().run(_ctx("Gợi ý giúp tôi vài quán ăn trưa ngon gần văn phòng."))
-    assert res.action == "route" and res.routed_to == "out_of_scope"
+    assert res.routed_to == "out_of_scope"
+
+
+async def test_bug_report_routes_to_issue_verification():
+    """A reported malfunction skips the answer attempt: there is nothing in the guides
+    to answer, so the turn goes straight to collecting evidence for a ticket."""
+    with patch(
+        "agent_customer_support.agents.triage.complete_structured",
+        return_value=TriageDecision(target="issue_verification"),
+    ):
+        res = await TriageAgent().run(_ctx("nhấn Lưu thì báo lỗi 500"))
+    assert res.routed_to == "issue_verification"
+
+
+async def test_issue_verification_is_an_allowed_triage_target():
+    """Constrained decoding is what keeps the model to these four, so the new target
+    has to be in the schema -- not only in the prompt."""
+    assert TriageDecision(target="issue_verification").target == "issue_verification"

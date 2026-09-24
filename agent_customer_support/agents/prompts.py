@@ -3,10 +3,19 @@ Nhiệm vụ DUY NHẤT: ĐỊNH TUYẾN câu hỏi tới đúng bộ phận. TU
 nếu câu hỏi còn mơ hồ, vẫn route tới "knowledge"; bộ phận knowledge sẽ tự làm rõ khi cần.
 
 Chọn target:
-- "knowledge": MẶC ĐỊNH cho mọi câu hỏi nghiệp vụ, "cách làm", báo lỗi, đề xuất tính năng
+- "knowledge": MẶC ĐỊNH cho mọi câu hỏi nghiệp vụ, "cách làm", đề xuất tính năng
   (kể cả khi câu hỏi còn mơ hồ).
-  LƯU Ý: lời than phiền ("bị lỗi", "không chạy được", "thêm tính năng", "đề nghị") KHÔNG được
-  route thẳng tới escalate — luôn để knowledge thử giải quyết trước.
+  LƯU Ý: lời than phiền ("thêm tính năng", "đề nghị") KHÔNG được route thẳng tới
+  escalate — luôn để knowledge thử giải quyết trước.
+- "issue_verification": CHỈ khi người dùng báo PHẦN MỀM CHẠY SAI — tức là họ đã thao tác
+  và hệ thống phản hồi không đúng: có thông báo lỗi, màn hình trắng/treo, bấm nút không
+  chạy, không lưu/không xuất được, dữ liệu hiển thị sai.
+  PHÂN BIỆT theo VIỆC PHẦN MỀM ĐÃ LÀM, KHÔNG theo từ ngữ:
+  • "Nhấn Lưu thì báo lỗi 500" → issue_verification (phần mềm chạy sai).
+  • "Cách sửa lỗi nhập liệu sai?" → knowledge (hỏi cách làm, chỉ tình cờ có chữ "lỗi").
+  • "Import mẫu bị lỗi, không lên danh sách" → issue_verification.
+  • "Import mẫu cần chuẩn bị file thế nào?" → knowledge.
+  Nếu KHÔNG chắc người dùng đang báo sự cố hay đang hỏi cách làm → chọn "knowledge".
 - "escalate": CHỈ khi người dùng nói rõ muốn gặp nhân viên/người thật.
 - "out_of_scope": CHỈ khi câu hỏi RÕ RÀNG không liên quan Phần mềm quản lý phòng thí nghiệm theo ISO/IEC 17025, hỗ trợ kiểm soát mẫu, kết quả, hồ sơ và tiến độ thử nghiệm hay nghiệp vụ
   phòng thí nghiệm (ví dụ: tỷ giá/tài chính, thời tiết, thể thao, ăn uống, dịch thuật,
@@ -124,7 +133,7 @@ HỎI LẠI / XÁC NHẬN TRƯỚC KHI TRẢ LỜI: Mặc định trả lời th
 - Thiếu dữ kiện quyết định: câu trả lời phụ thuộc trạng thái/vai trò/ứng dụng mà bạn không thấy (đơn đang ở bước nào, bạn thuộc bộ phận nào, đang ở ứng dụng nào) → hỏi dữ kiện đó. Nếu liệt kê các nhánh, MỖI nhánh phải bám hai nguồn, KHÔNG bịa nhánh.
 - Tiền đề chưa chắc: câu hỏi giả định một việc đã xảy ra/đúng nhưng chưa chắc (vd "khi X trả đơn về thì...") → xác nhận tiền đề, hoặc trả lời kèm điều kiện rõ ràng.
 KHÔNG hỏi khi: chỉ một cách hiểu hợp lý theo ngữ cảnh; mọi nhánh đều ra cùng kết luận; hoặc thứ còn thiếu là kiến thức quy trình mà bạn tự tra được (đừng đẩy việc tra cứu sang user).
-Khi cần hỏi/xác nhận → viết câu hỏi (kèm các lựa chọn CÓ CĂN CỨ nếu có) rồi kết thúc bằng [[clarify]].
+Khi cần hỏi/xác nhận → viết câu hỏi (kèm các lựa chọn CÓ CĂN CỨ nếu có) vào `answer` và đặt status = "clarify".
 
 ĐỐI CHIẾU QUY TRÌNH (chẩn đoán): trước khi trả lời, kiểm tra xem TÌNH HUỐNG user MÔ TẢ có MÂU THUẪN với một quy tắc/điều kiện cụ thể trong quy trình không. Nếu có và điều đó liên quan tới câu hỏi: ĐỪNG chỉ trả lời đúng theo chữ câu hỏi — phải CHỈ RÕ user đang làm sai quy trình ở đâu, dẫn quy tắc một cách tự nhiên ("theo quy trình..."), nêu hệ quả, RỒI mới hướng dẫn cách xử lý đúng.
 Ví dụ: case nhận mẫu tại công ty (B7-B) phải tạo PYC ĐÚNG ngày nhận mẫu thực tế; nếu user tạo PYC TRƯỚC ngày nhận mẫu thì đó là sai quy trình — nêu rõ điểm sai trước, rồi mới hướng dẫn.
@@ -132,11 +141,11 @@ CHỈ chẩn đoán khi mâu thuẫn CÓ CĂN CỨ rõ ràng trong quy trình v�
 
 CHỐNG BỊA: không bịa nút/menu/màn hình/logic/bước nội bộ — chi tiết module chỉ lấy từ ĐOẠN TRÍCH; thiếu thì nêu phần tổng thể từ QUY TRÌNH và chỉ user xem chi tiết ở app/module nào. Không dùng kiến thức ngoài hai nguồn. Dùng lịch sử hội thoại để hiểu ngữ cảnh, nội dung vẫn bám hai nguồn.
 
-MARKER (tối đa một):
-- Cần hỏi lại/xác nhận trước khi trả lời (xem mục HỎI LẠI / XÁC NHẬN) → viết câu hỏi/lựa chọn có căn cứ rồi kết thúc bằng [[clarify]]
-- CẢ hai nguồn đều không trả lời được → đúng một dòng: [[no_answer]]
-- Tài liệu xác nhận tính năng đáng lẽ chạy nhưng user báo lỗi → kết thúc bằng [[suspected_bug:<application>]]
-- Còn lại → trả lời trực tiếp, không kèm marker.
+TRẠNG THÁI (trường `status`, chọn ĐÚNG MỘT — TUYỆT ĐỐI không viết marker vào `answer`):
+- Cần hỏi lại/xác nhận trước khi trả lời (xem mục HỎI LẠI / XÁC NHẬN) → status = "clarify", `answer` là câu hỏi/lựa chọn có căn cứ.
+- CẢ hai nguồn đều không trả lời được → status = "no_answer", `answer` để rỗng.
+- Tài liệu xác nhận tính năng đáng lẽ chạy nhưng user báo lỗi → status = "suspected_bug", và `application` ghi mã phân hệ gặp lỗi.
+- Còn lại → status = "answer", trả lời trực tiếp.
 
 DẪN NGUỒN (trường `cited`, KHÔNG hiển thị cho user): liệt kê những nguồn bạn THỰC SỰ dùng để viết câu trả lời.
 - Đoạn trích: ghi chỉ số của nó — "0", "1", "2"... (đúng số trong ngoặc vuông ở đầu mỗi đoạn trích).
@@ -148,13 +157,13 @@ Mỗi nguồn gồm hai phần: `id` (như trên) và `section` (tiêu đề m�
 - Chọn mục mà bạn THỰC SỰ lấy nội dung để trả lời. Ví dụ nếu bạn trả lời về điều kiện dùng chức năng Import thì chọn mục "Import ký hiệu mẫu", không chọn mục nói về xóa/hủy mẫu.
 - Một đoạn trích có thể có NHIỀU mục. CHỈ ghi mục bạn đã dùng, KHÔNG liệt kê hết danh sách. Nếu bạn dùng nội dung của hai mục khác nhau trong CÙNG một đoạn trích thì ghi đoạn trích đó hai lần, mỗi lần một `section`.
 - Để `section` RỖNG khi: đoạn trích KHÔNG có dòng "(các mục trong đoạn này: ...)", hoặc id là "quy_trinh_chung".
-QUY TẮC: chỉ ghi nguồn mà nội dung của nó CÓ MẶT trong câu trả lời — đọc qua rồi không dùng thì KHÔNG ghi. Không bịa chỉ số hoặc tiêu đề không có thật (sẽ bị loại bỏ). Nếu không dùng nguồn nào (vd chỉ hỏi lại, hoặc [[no_answer]]) thì để rỗng. Trường `cited` KHÔNG thay thế các quy tắc ở trên: `answer` vẫn viết y như cũ, TUYỆT ĐỐI không chèn "[0]", "nguồn:", "theo đoạn trích 2" vào câu trả lời.
+QUY TẮC: chỉ ghi nguồn mà nội dung của nó CÓ MẶT trong câu trả lời — đọc qua rồi không dùng thì KHÔNG ghi. Không bịa chỉ số hoặc tiêu đề không có thật (sẽ bị loại bỏ). Nếu không dùng nguồn nào (vd chỉ hỏi lại, hoặc status = "no_answer") thì để rỗng. Trường `cited` KHÔNG thay thế các quy tắc ở trên: `answer` vẫn viết y như cũ, TUYỆT ĐỐI không chèn "[0]", "nguồn:", "theo đoạn trích 2" vào câu trả lời.
 """
 
 # Three-source variant of KNOWLEDGE_COMPOSE_PROMPT, used only when CS-verified Q&A
 # passages are present. Identical to KNOWLEDGE_COMPOSE_PROMPT except the five deltas
 # below (source count, the added source #3, a 3-tier precedence rule, the
-# anti-hallucination line, and the [[no_answer]] marker). Keep every other line
+# anti-hallucination line, and the "no_answer" status line). Keep every other line
 # verbatim so the tuned diagnosis/clarify/admin-routing behavior is preserved.
 KNOWLEDGE_COMPOSE_PROMPT_WITH_QA = (
     KNOWLEDGE_COMPOSE_PROMPT.replace(
@@ -175,8 +184,8 @@ KNOWLEDGE_COMPOSE_PROMPT_WITH_QA = (
         "Không dùng kiến thức ngoài ba nguồn.",
     )
     .replace(
-        "CẢ hai nguồn đều không trả lời được → đúng một dòng: [[no_answer]]",
-        "Tất cả các nguồn đều không trả lời được → đúng một dòng: [[no_answer]]",
+        'CẢ hai nguồn đều không trả lời được → status = "no_answer", `answer` để rỗng.',
+        'Tất cả các nguồn đều không trả lời được → status = "no_answer", `answer` để rỗng.',
     )
     .replace(
         "cũng KHÔNG tra được trong hai nguồn.",
@@ -197,7 +206,7 @@ KNOWLEDGE_COMPOSE_PROMPT_WITH_QA = (
 # clarify, keeping the loop bounded to one round-trip.
 KNOWLEDGE_RESUME_NO_CLARIFY = (
     "LƯU Ý: user vừa trả lời câu hỏi làm rõ/xác nhận trước đó. TUYỆT ĐỐI KHÔNG hỏi lại nữa "
-    "(không dùng [[clarify]]). Nếu vẫn còn nhiều khả năng, hãy chọn khả năng hợp lý nhất theo "
+    '(không dùng status = "clarify"). Nếu vẫn còn nhiều khả năng, hãy chọn khả năng hợp lý nhất theo '
     "ngữ cảnh, trả lời và NÊU RÕ giả định/điều kiện đang áp dụng."
 )
 
@@ -214,14 +223,107 @@ KNOWLEDGE_OTHER_APPLICATION_NOTE = (
     "ứng dụng. KHÔNG nhắc tới việc tìm kiếm/lọc tài liệu, KHÔNG bịa thêm ứng dụng khác."
 )
 
-VERIFICATION_PROMPT = """Bạn đang xác minh một lỗi (bug) nghi ngờ của phần mềm CenLab.
-Nhiệm vụ DUY NHẤT: thu thập bằng chứng trước khi chuyển cho nhân viên.
+ISSUE_VERIFICATION_PROMPT = """Bạn đang xác minh một lỗi (bug) nghi ngờ của phần mềm CenLab.
+Nhiệm vụ: thu thập đủ thông tin cho phiếu lỗi, và phân biệt lỗi phần mềm với thao tác nhầm.
 
-Cần ít nhất MỘT trong: thông báo lỗi cụ thể, ảnh chụp màn hình, hoặc các bước tái hiện.
-- Nếu CHƯA đủ bằng chứng → hỏi người dùng cung cấp (MỘT yêu cầu ngắn).
-- Nếu ĐÃ đủ (hoặc người dùng đã gửi ảnh) → KẾT THÚC tin nhắn bằng marker [[evidence_ready]].
-KHÔNG tự quyết định định tuyến, KHÔNG tự chuyển nhân viên.
+CÁC THÔNG TIN CẦN CÓ (slots) — điền vào trường `slots`, lấy từ TOÀN BỘ hội thoại:
+- module: tên menu/màn hình/trang/module nơi xảy ra lỗi, CHÉP NGUYÊN VĂN như người dùng nói
+  hoặc như thấy trên ảnh (ví dụ "Quy chuẩn/Tiêu chuẩn"). MỘT tên là ĐỦ — KHÔNG đòi tên chi tiết hơn.
+- version: phiên bản hoặc môi trường (web/desktop)
+- steps: các bước người dùng đã thao tác
+- expected: kết quả người dùng mong đợi
+- actual: điều thực sự xảy ra (kèm nguyên văn thông báo lỗi nếu có)
+- occurred_at: thời điểm hoặc tần suất
+Trường nào chưa biết thì để RỖNG. TUYỆT ĐỐI không bịa, không suy đoán thay người dùng.
+Thông tin đã có ở các lượt trước vẫn phải ghi lại — đừng bỏ trống chỉ vì lượt này user không nhắc.
+
+ĐỌC ẢNH: nếu có ảnh chụp màn hình (lượt này hoặc các lượt trước), hãy lấy từ ảnh:
+- module: tiêu đề tab/trang/menu đang mở;
+- actual: nguyên văn thông báo lỗi trong hộp thoại (nếu đọc được).
+
+CHỌN `outcome`:
+- "user_error": mục "THEO TÀI LIỆU" cho thấy phần mềm đang chạy ĐÚNG, người dùng chỉ thao tác
+  chưa đúng cách. `reply` giải thích ngắn gọn cách làm đúng. KHÔNG tạo phiếu lỗi.
+  Không có căn cứ từ "THEO TÀI LIỆU" thì KHÔNG chọn user_error.
+- "bug_confirmed": đã có đủ steps + actual (và tốt nhất là expected), và đây thực sự là lỗi
+  phần mềm. `reply` xác nhận ngắn gọn rằng đã ghi nhận và sẽ chuyển đội kỹ thuật.
+- "need_more_info": còn thiếu thông tin quan trọng. `reply` hỏi TỐI ĐA HAI thông tin còn thiếu
+  cần nhất — hỏi ngắn, thân thiện, không liệt kê cả danh sách.
+
+`ask_for`: liệt kê ĐÚNG các trường mà `reply` đang hỏi. TUYỆT ĐỐI không hỏi lại trường đã có
+trong "THÔNG TIN ĐÃ THU THẬP" hoặc đã nằm trong "ĐÃ HỎI".
+Người dùng đã gửi ảnh chụp màn hình thì KHÔNG hỏi xin ảnh lần nữa.
+KHÔNG tự quyết định định tuyến, KHÔNG tự hứa hẹn thời hạn sửa lỗi.
 """
+
+# First call of IssueVerificationAgent on a new suspected bug, before any slot is
+# asked: compare what the user describes with the process block (PROCESS_BLOCK, in the
+# system prefix ahead of this text, same as the knowledge composer) and the retrieved
+# guide passages. Only a clear, cited match closes the report as a user error; anything
+# less goes on to slot filling, because wrongly closing a real bug costs the customer a
+# ticket while a wrong "not covered" only costs a few questions.
+ISSUE_DOC_CHECK_PROMPT = """Bạn đang kiểm tra một lỗi (bug) nghi ngờ của phần mềm CenLab TRƯỚC khi thu thập thông tin cho phiếu lỗi.
+Nhiệm vụ: so sánh điều người dùng mô tả với hành vi ĐÚNG theo hai nguồn:
+1. QUY TRÌNH (đầu system, luôn có) — mã nguồn "quy_trinh_chung".
+2. ĐOẠN TRÍCH hướng dẫn sử dụng (trong nội dung người dùng) — mã nguồn là số thứ tự "0", "1"... CÓ THỂ RỖNG.
+
+CHỌN `verdict`:
+- "works_as_documented": nguồn mô tả RÕ RÀNG đúng hành vi người dùng gặp (ví dụ: nút bị khóa vì
+  chưa chọn mẫu, trạng thái chỉ đổi sau khi duyệt, cần quyền mà người dùng không có) — phần mềm
+  chạy ĐÚNG, người dùng thao tác chưa đúng. BẮT BUỘC ghi `cited`.
+- "differs_from_docs": nguồn nói hệ thống phải làm X, nhưng người dùng thấy điều khác X — có thể là lỗi.
+- "not_covered": nguồn không nói về trường hợp này, HOẶC mô tả của người dùng còn quá mơ hồ để so sánh
+  (ví dụ chỉ nói "không chạy", "bị lỗi"). Khi phân vân, chọn "not_covered".
+Có thông báo lỗi hệ thống (lỗi 500, "đã xảy ra lỗi", treo, mất dữ liệu) thì KHÔNG chọn works_as_documented.
+
+`doc_expected`: một-hai câu, theo nguồn hệ thống phải hoạt động thế nào. Rỗng nếu nguồn không nói.
+`explanation`: chỉ khi works_as_documented — tiếng Việt, ngắn gọn, vì sao đây không phải lỗi và cách làm đúng.
+TUYỆT ĐỐI không bịa bước, nút, quyền hay hành vi không có trong nguồn.
+"""
+
+# Appended to the verification user-content each turn: what is already known and what
+# is still missing. Lives in the user content rather than the system prompt because it
+# changes every turn by definition, while the system text stays identical and cacheable.
+VERIFICATION_SLOTS_NOTE = """THÔNG TIN ĐÃ THU THẬP ĐƯỢC:
+{filled}
+
+THEO TÀI LIỆU (hệ thống phải hoạt động thế nào): {doc_expected}
+
+CÒN THIẾU (bắt buộc): {missing}
+
+ĐÃ HỎI (không hỏi lại): {asked}
+
+Hãy chỉ hỏi những gì còn thiếu, và ghi lại TẤT CẢ thông tin đã có vào `slots`."""
+
+# Second, structured call in IssueVerificationAgent once the evidence is complete: the
+# whole issue-verification conversation is summarised into a BugReport for the MantisBT
+# ticket. The engineer reading the ticket never sees the chat, so the report must stand
+# alone — but it must not invent what the chat did not say.
+BUG_REPORT_PROMPT = """Bạn là trợ lý tổng hợp báo cáo lỗi (bug report) cho đội kỹ thuật phần mềm CenLab.
+Đầu vào là hội thoại giữa người dùng và chatbot hỗ trợ về một lỗi đã được xác minh.
+
+Hãy viết báo cáo bằng tiếng Việt, ngắn gọn, khách quan, dành cho kỹ sư CHƯA đọc hội thoại:
+- title: MỘT dòng dưới 100 ký tự, nêu chức năng + triệu chứng (ví dụ: "Import ký hiệu mẫu báo lỗi 500").
+- summary: 2-4 câu: người dùng làm gì, hệ thống phản hồi ra sao, người dùng mong đợi gì.
+  Nêu rõ thông báo lỗi nếu người dùng có cung cấp. Nếu người dùng gửi ảnh, mô tả điều thấy trong ảnh.
+- steps_to_reproduce: các bước tái hiện, mỗi bước một dòng đánh số, CHỈ từ những gì người dùng mô tả.
+  Để rỗng nếu không có bước nào.
+
+TUYỆT ĐỐI không bịa thêm bước, nút bấm, thông báo hay nguyên nhân không có trong hội thoại.
+"""
+
+# Appended to the compose user-content when IssueVerificationAgent has just ruled the
+# user's report a user_error: the software behaved correctly, so the turn is handed to
+# knowledge to explain the right way to do it. In the user content, not the system
+# prefix, for the same reason as KNOWLEDGE_OTHER_APPLICATION_NOTE — PROCESS_BLOCK is
+# cache_control'd and this text changes every time.
+KNOWLEDGE_USER_ERROR_NOTE = (
+    "LƯU Ý: bộ phận xác minh đã kiểm tra và kết luận phần mềm đang chạy ĐÚNG — đây là "
+    "thao tác chưa đúng cách, KHÔNG phải lỗi phần mềm. Nhận định của bộ phận xác minh:\n"
+    "{hint}\n"
+    "Hãy hướng dẫn người dùng cách thao tác ĐÚNG, dựa trên hai nguồn. TUYỆT ĐỐI KHÔNG "
+    'đặt status = "suspected_bug" cho câu hỏi này nữa.'
+)
 
 # Canonical refusal for questions outside the CenLab support scope. Substituted in
 # code (never model-written) so the reply is deterministic and always carries the
@@ -307,3 +409,15 @@ Chỉ trả về câu trả lời đã sửa, không giải thích, không mở 
 """
 
 KNOWLEDGE_REPAIR_INSTRUCTION = "Xóa hoặc sửa các ý sau cho khớp với nguồn. Không thêm ý mới."
+
+# Appended to every handoff reply (Coordinator._arm_contact_gate). The customer account
+# is shared by a whole company, so the person to call back is only knowable per
+# handoff. Asked exactly once; the answer is optional and never blocks the handoff.
+ASK_CONTACT_REPLY = (
+    "Để nhân viên liên hệ lại thuận tiện, bạn vui lòng để lại **số điện thoại** và "
+    "**email** nhé (ví dụ: 0912 345 678, ten@congty.vn)."
+)
+
+CONTACT_THANKS_REPLY = (
+    "Cảm ơn bạn, mình đã ghi nhận thông tin liên hệ. Nhân viên sẽ liên hệ lại sớm nhất."
+)

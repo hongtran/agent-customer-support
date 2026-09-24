@@ -6,7 +6,7 @@ def _flow():
     return Flow(
         id="f1",
         title="t",
-        module="m",
+        application="m",
         triggers=["x"],
         steps=[
             FlowStep(

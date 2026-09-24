@@ -100,6 +100,19 @@ class AttachmentStore:
             size_bytes=len(raw),
         )
 
+    async def get_bytes(self, stored: StoredAttachment) -> bytes:
+        """Server-side read-back of one attachment.
+
+        The only other read path is a presigned URL for the browser. This one exists
+        so a verified bug can carry the screenshots from EARLIER verification turns
+        into the MantisBT ticket — by then they exist only as keys on the persisted
+        turn, never as bytes in DynamoDB.
+        """
+        async with get_client() as s3:
+            obj = await s3.get_object(Bucket=self.bucket, Key=stored.s3_key)
+            async with obj["Body"] as body:
+                return await body.read()
+
     async def presign(self, stored: StoredAttachment) -> AttachmentRef:
         """Short-lived GET URL. Signing is local — no network round trip — so this
         is cheap enough to do per attachment on every response."""

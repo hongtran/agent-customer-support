@@ -39,9 +39,8 @@ def _coord(reply: str):
     c.guardrail.check_output = AsyncMock(return_value={"pass": True, "reason": ""})
     c.triage = MagicMock()
     c.knowledge = MagicMock()
-    c.knowledge.run = AsyncMock(return_value=AgentResult(reply=reply, resolved=True))
-    c.flow = MagicMock()
-    c.verification = MagicMock()
+    c.knowledge.run = AsyncMock(return_value=AgentResult(reply=reply, knowledge_status="answer"))
+    c.issue_verification = MagicMock()
     c.escalation = MagicMock()
     # An ungrounded reply is handed to a human rather than dead-ended, so the flagged
     # path runs the escalation agent.
@@ -143,7 +142,7 @@ async def test_a_flagged_reply_carries_no_citations():
     c.knowledge.run = AsyncMock(
         return_value=AgentResult(
             reply="Anh/Chị vui lòng vào menu Nguyên nhân.",
-            resolved=True,
+            knowledge_status="answer",
             citations=[Citation(doc_id="d1", label="Tạo mới biên bản", kind="guide")],
             source_passages=["Vào menu Nguyên nhân."],
         )

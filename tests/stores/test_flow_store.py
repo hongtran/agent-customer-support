@@ -5,11 +5,11 @@ from agent_customer_support.stores.flow_store import FlowStore
 pytestmark = pytest.mark.asyncio
 
 
-def _flow(fid="f1", module="xet-nghiem", scope="global"):
+def _flow(fid="f1", application="xet-nghiem", scope="global"):
     return Flow(
         id=fid,
         title="t",
-        module=module,
+        application=application,
         scope=scope,
         version=1,
         language="vi",
@@ -27,11 +27,11 @@ async def test_import_and_get():
     assert got is not None and got.id == "fA"
 
 
-async def test_list_for_customer_filters_by_module():
+async def test_list_for_customer_filters_by_application():
     store = FlowStore()
     await store.init()
-    await store.upsert(_flow("fX", module="xet-nghiem"))
-    await store.upsert(_flow("fQ", module="quan-trac"))
-    flows = await store.list_for_modules(["xet-nghiem"])
+    await store.upsert(_flow("fX", application="xet-nghiem"))
+    await store.upsert(_flow("fQ", application="quan-trac"))
+    flows = await store.list_for_applications(["xet-nghiem"])
     ids = {f.id for f in flows}
     assert "fX" in ids and "fQ" not in ids

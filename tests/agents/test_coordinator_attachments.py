@@ -35,9 +35,10 @@ def _coord():
     c.guardrail.check_output = AsyncMock(return_value={"pass": True, "reason": ""})
     c.triage = MagicMock()
     c.knowledge = MagicMock()
-    c.knowledge.run = AsyncMock(return_value=AgentResult(reply="Vào menu X.", resolved=True))
-    c.flow = MagicMock()
-    c.verification = MagicMock()
+    c.knowledge.run = AsyncMock(
+        return_value=AgentResult(reply="Vào menu X.", knowledge_status="answer")
+    )
+    c.issue_verification = MagicMock()
     c.escalation = MagicMock()
     c.sessions.get.return_value = SessionState(conversation_id="cv1", pending="knowledge_clarify")
     return c

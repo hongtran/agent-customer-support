@@ -6,8 +6,8 @@ from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
 from agent_customer_support.config import get_settings
-from agent_customer_support.models import Conversation, ConversationSummary, Turn
 from agent_customer_support.stores.dynamo import get_resource
+from agent_customer_support.models import Conversation, ConversationSummary, Turn, ContactInfo
 
 # Lists one customer's conversations, newest first, without scanning the table. Sparse:
 # a row with no `updated_at` (written before this index existed) is not in it until
@@ -102,6 +102,19 @@ class ConversationStore:
         """Write the whole item. Refreshes the summary first, so every write keeps the
         by-customer index current and never stores a null index key."""
         conv.refresh_summary()
+        async with get_resource() as ddb:
+            table = await ddb.Table(self.table_name)
+            await table.put_item(Item=conv.model_dump(mode="json"))
+
+    async def set_contact(
+        self, conversation_id: str, customer_id: str, contact: ContactInfo
+    ) -> None:
+        """Record the contact the user left after a handoff. Same load-modify-put as
+        `append`, so a row that does not exist yet is created with its customer."""
+        conv = await self.load(conversation_id)
+        if not conv.customer_id:
+            conv.customer_id = customer_id
+        conv.contact = contact
         async with get_resource() as ddb:
             table = await ddb.Table(self.table_name)
             await table.put_item(Item=conv.model_dump(mode="json"))

@@ -1,7 +1,7 @@
 {
   "id": "pyc_su_co",
   "title": "Xử lý PYC sự cố",
-  "module": "yeu-cau-thu-nghiem",
+  "application": "yeu-cau-thu-nghiem",
   "scope": "global",
   "version": 1,
   "language": "vi",

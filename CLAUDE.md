@@ -35,20 +35,71 @@ This is a **Vietnamese-language customer support agent** for CenLab cloud softwa
 
 `POST /widget/chat` → `Coordinator.handle_turn()` → agents in sequence → `ChatResponse`
 
-The `Coordinator` (`agents/coordinator.py`) orchestrates:
+The `Coordinator` (`agents/coordinator.py`) runs the turn:
 1. **Input guardrail** — cheap non-LLM checks (empty/oversized input) only
-2. **Triage** — routes to `flow`, `escalate`, `knowledge`, or `out_of_scope` (clearly
-   non-CenLab questions get the canonical refusal before any RAG/compose spend;
-   this is the only scope gate — `KnowledgeAgent` deliberately carries no scope
-   logic, so anything triage lets through gets a normal answer attempt)
-3. **Knowledge** — RAG search + LLM answer; may detect a suspected bug
-4. **Verification** — multi-turn evidence collection when a bug is suspected (state preserved in `session.pending = "verify_issue"`)
-5. **Flow** — walks the user through a step/transition/outcome tree (e.g. account recovery)
-6. **Escalation** — posts to Zalo webhook and returns a handoff reply
-7. **Output guardrail** — grounding check on a reply that cited a passage; an
-   unsupported answer is replaced and handed off (see Citations below)
+2. **Route** — `_route` is a driver loop over `routing.next_step` (see Routing below).
+   The steps it can run:
+   - **Triage** — routes to `knowledge`, `issue_verification`, `escalate`, or
+     `out_of_scope` (clearly non-CenLab questions get the canonical refusal before any
+     RAG/compose spend; this is the only scope gate — `KnowledgeAgent` deliberately
+     carries no scope logic, so anything triage lets through gets a normal answer
+     attempt)
+   - **Knowledge** — RAG search + LLM answer, reporting `answer`, `clarify`,
+     `no_answer` or `suspected_bug`
+   - **Issue verification** — multi-turn slot filling when a bug is suspected (state
+     in `session.pending = "verify_issue"`), reporting `need_more_info`, `user_error`
+     or `bug_confirmed`. Reached two ways: a direct triage route when the user reports
+     the software misbehaving, or Knowledge's `suspected_bug` status. Both go through
+     `Coordinator._step_issue_verification`, so `pending_context` is armed identically
+   - **File ticket** — a verified bug becomes a MantisBT ticket, a backlog row and a
+     handoff, in that order (see Bug tickets below)
+   - **Escalation** — posts to the Zalo webhook **and emails the CS team**, returns a
+     handoff reply. Every handoff reply ends with a one-time ask for the user's phone
+     and email (see Contact follow-up below)
+3. **Output guardrail** — grounding check on a reply that cited a passage; an
+   unsupported answer is repaired or handed off (see Citations below)
 
 Every agent receives a `TurnContext` (`agents/context.py`) and returns `AgentResult` (`models.py`). The `Agent` protocol (`agents/base.py`) is a structural interface — just `name: str` and `async def run(ctx) -> AgentResult`.
+
+### Routing
+
+**The decision and the effects are separate files.** `agents/routing.py` holds
+`next_step(RouteState) -> (Step, reason)`: a pure function over a small frozen
+snapshot, with no I/O, no LLM call and no import of an agent or a store. Every rule is
+therefore one assertion in `tests/agents/test_routing.py` with no mocks at all, where
+reaching a branch of the old `_route` meant standing up five agents and nine stores.
+`Coordinator._route` is the driver — it executes a step, updates the session, folds
+the result back into the snapshot, and asks again until a step in `routing.TERMINAL`
+ends the turn.
+
+Because the driver owns the routing state, **no agent writes `session.pending` any
+more**. `KnowledgeAgent` takes `allow_clarify` as an argument and reports a status; the
+coordinator decides what that means for the session.
+
+**Every rule carries a reason string**, and it is not decoration: it rides on the
+step's Langfuse span as `metadata.handoff_reason`, and for the rules that end in a
+handoff it is also the reason CS reads. The root `turn` span carries the whole `path`
+(`["triage", "knowledge", "reply"]`), so a route can be read off a trace without
+replaying it.
+
+**The limits are the other reason this module exists.** There were none before: an
+evidence collection that never completed kept `pending="verify_issue"` until the Redis
+session expired, and nothing bounded a clarify loop. Each counter lives on
+`SessionState` and has a rule that turns the cap into a handoff rather than a wait —
+`MAX_CLARIFY` (2 questions, then escalate), `MAX_VERIFY_TURNS` (4 collection turns,
+then file the ticket with whatever was collected) and `MAX_HOPS` (6) as the backstop
+for the rules themselves. The longest legitimate path is four hops, so a run that
+reaches six has found a cycle the rules did not anticipate.
+
+`user_error_seen` is the one non-numeric guard: a `user_error` hands the turn back to
+Knowledge, which can report `suspected_bug` again, and the two would ping-pong at a
+model call each way. The second bounce escalates instead.
+
+**Cancelling a flow is a regex, not a second triage pass** (`routing.wants_cancel`). It
+runs on every turn with a flow open, and paying for an LLM call to read "thôi bỏ qua"
+would be the most expensive way to read two words. It is conservative on purpose — the
+bare verbs only count at the start of a message, because a false positive throws away
+collected evidence while a miss only makes the user repeat themselves.
 
 ### LLM layer
 
@@ -67,7 +118,7 @@ Application scoping is a **hard, server-side Qdrant payload filter** (`_build_fi
 
 **A scope that returns nothing is retried once, wider.** Because the filter is hard, a
 user who picks the wrong module in the widget gets zero passages for a question the
-corpus can answer one module over — and the composer then emits `[[no_answer]]`, so the
+corpus can answer one module over — and the composer then reports `no_answer`, so the
 turn ends in a clarify-then-handoff instead of an answer. `RagClient.search_with_fallback`
 retries that miss against a caller-supplied wider scope; `KnowledgeAgent` supplies
 `CustomerProfile.enabled_applications`, **never** an unscoped search, so a customer is
@@ -114,11 +165,150 @@ expiry. `role` is therefore always the stored one, never the minted one.
 The first admin is inserted by hand (see `docs/DEV.md`); there is no bootstrap path and
 no seed script by design.
 
+### Bug tickets (MantisBT)
+
+`IssueVerificationAgent` is **slot filling**: one structured call per turn
+(`VerificationDecision` in `llm/schemas.py`) returning an outcome, a reply, and the whole
+fixed set of facts a ticket needs (`BugSlots` in `models.py` — module, version, steps,
+expected, actual, occurred_at). The bar used to be "at least ONE of an error message, a
+screenshot or repro steps", read out of free text with an `[[evidence_ready]]` regex;
+slots are what let Python see what is still missing and file a usable ticket even when
+the collection is cut short.
+
+**`slots.module` and `VerifyContext.application` are two different levels, and the
+names are kept apart deliberately.** An *application* is what the customer bought: it
+scopes the Qdrant filter, comes from the triage route or Knowledge's `suspected_bug`
+status as a slug, and is what the ticket is filed under. A *module* is one level down
+inside it — the menu, screen or page the user was on ("Danh sách phiếu yêu cầu"), which
+only ever appears in the ticket body. Merging them into one field would scope a
+retrieval to a screen name, which matches nothing in the corpus.
+
+**Python is the memory, not the model.** Prior turns reach the model as plain text, so
+a slot the model leaves empty means "nothing new this turn", never "forget that":
+`BugSlots.merge` fills empty slots from what the session held and lets a non-empty
+value win, so the user can still correct themselves. Whether a screenshot ever arrived
+is tracked as `VerifyContext.has_image`, which is also why it is not a slot. The merged
+context is written back to `pending_context` on **every** outcome — the old not-ready
+branch returned no evidence at all, which is why no slot state could survive a turn.
+
+**Earlier screenshots are shown again.** An image used to reach the model only on the
+turn it was sent, so a screen name or an error dialog the model missed then was lost
+for good. `_step_issue_verification` now reads the screenshots sent **since the start of
+the conversation** (turn 0, not `since_turn` — the error screenshot often arrives with the
+question Knowledge answered before the bug was suspected) back from S3
+(`Coordinator._stored_images`, shared with the ticket's `_evidence_files`) and passes the
+newest two as `ctx.evidence_images`; the agent attaches them to the slots note, leaving
+the user's own message untouched. The ticket still takes only images since `since_turn`.
+Every verification turn therefore pays an S3 read per earlier screenshot, and the
+confirming turn reads the in-range ones twice (verifier, then ticket), which was left as
+is rather than cached.
+
+**A slot is asked at most once, in code.** A prompt alone did not hold this: in a live
+conversation the model asked for the screen name three turns running after the user had
+given it twice, because the old `module` wording ("inside the application, not the
+application") made it treat "Quy chuẩn/Tiêu chuẩn" as a parent area. The model now also
+returns `ask_for` — which slots its reply asks about — and `_guard` in
+`issue_verification.py` enforces the rest, tracking `VerifyContext.asked_last` and
+`ask_counts`:
+- a slot we asked for last turn that the model still left empty is **filled with the
+  user's message as written** (max 200 chars) — the message is the answer, the model
+  just failed to read it. Known limit: an off-topic reply lands in the slot (a cancel
+  phrase never gets here, `routing.wants_cancel` drops the flow first);
+- a slot that is filled, or was asked once, is removed from `ask_for`, and if anything
+  was removed the reply is rebuilt from `_SLOT_QUESTIONS`, so it cannot ask it anyway;
+- while collecting: all required slots filled → `bug_confirmed`; everything the model
+  asked was filtered and a required slot is still empty → one canned question for it,
+  or `bug_confirmed` if each was already asked. A reply that asks for no slot at all (a
+  screenshot) is left alone.
+The guard trusts `ask_for`: a reply that asks for a slot without declaring it cannot be
+seen, and the 4-turn cap is still the last stop.
+
+**The docs are checked before any slot is asked.** On the first verification turn
+(`VerifyContext.doc_checked`), `_doc_check` searches the guides with the same scope
+rules as Knowledge (`search_with_fallback`, query = Knowledge's contextualized `query`
+when the bug came from there, else the user's words) and makes one structured call
+(`DocCheck`, traced as `llm.issue_verification.doc_check`) with `PROCESS_BLOCK` in the
+system prefix and the passages numbered by `agents/passages.passages_block` — the same
+sources and form the composer reads. `works_as_documented` with a cited id we actually
+offered (a passage index or `quy_trinh_chung`) returns `user_error` at once; an invented
+id, an empty explanation or a `None` parse falls through to slot filling, because
+closing a real bug as a user error is the costly mistake. The model is called even with
+no passages, since the process block alone can show the behavior is correct. Whatever
+the verdict, `doc_expected` (what the docs say should happen, short text — never the
+passages) is kept in `pending_context`: later turns read it in `VERIFICATION_SLOTS_NOTE`
+("THEO TÀI LIỆU"), which is the only ground the slot-filling call has for a later
+`user_error`, and `_with_slots` prints it in the ticket body.
+
+**Three outcomes, and only one files a ticket.** `user_error` means the software
+behaved correctly, so the turn goes back to Knowledge with the verifier's explanation in
+`ctx.route_hint` — no MantisBT ticket, no backlog row, nobody paged. `need_more_info`
+asks for at most two missing slots. `bug_confirmed` (or the collection cap, see Routing)
+runs `Coordinator._step_file_ticket`: **report → MantisBT → backlog → Zalo**, in that
+order. The report is a second structured call (`BugReport`: title, summary, repro steps;
+traced as `llm.issue_verification.report`) over the same conversation; a `None` parse
+falls back to `fallback_report`, which lifts a title from the user's original message,
+because the ticket must still be filed once the evidence is in hand. A `None` parse on
+the *decision* call, by contrast, always becomes `need_more_info` — a parse failure must
+not be able to file a ticket. `_with_slots` folds the collected slots and the still-empty
+required ones into the ticket body, so a report filed at the cap says so on its face
+rather than reading like a complete one that happens to be thin.
+
+`mantis.py` is the whole client and mirrors `escalation.py`: httpx, settings-driven, off
+unless both `MANTIS_BASE_URL` and `MANTIS_API_TOKEN` are set. MantisBT's `summary` field
+**is the title**, written as `[BUG][<customer name>] <title>` by `format_title` (VARCHAR
+128: only the title part is cut, the prefix survives), `description` is
+the body, the transcript goes in `additional_information`. The backlog row keeps the plain
+title; it already carries the customer id. Screenshots are sent in a **second** call
+(`POST /issues/{id}/files`) on purpose: a rejected upload (`max_file_size`) then costs
+the screenshot, not the ticket. `create_issue` **never raises** — the reply is already
+paid for, so a tracker outage costs the ticket only: the backlog row is still written
+(with `mantis_issue_id = None`) and the Zalo note says the ticket must be filed by hand.
+MantisBT goes before the backlog write so the row carries the ticket id in its single
+`put_item`; there is no update path. Only the "verified bug" route files a ticket.
+
+Evidence is **every image since the bug was suspected, and nothing before it**:
+`_new_verify_context` stamps `since_turn` with the index the current
+turn will get, and `_evidence_files` walks user turns from there (S3 keys, read back via
+`AttachmentStore.get_bytes`) plus the current turn (still base64 in memory). A read that
+fails drops that one file. Capped to the most recent `mantis_max_files`. The bytes exist
+only for the duration of the turn — the `Attachment` / `StoredAttachment` split stands.
+
+### Contact follow-up
+
+The customer account is shared by a whole company, so after a handoff CS still needs to
+know **who** to call back. The handoff itself is never delayed: ticket, backlog row, Zalo
+and email all go out on the turn the escalation is decided, as before. Then, in one
+place — `Coordinator._arm_contact_gate`, run in `handle_turn` whenever a result has
+`escalated=True` — `ASK_CONTACT_REPLY` is appended to the reply and the session is put in
+`pending = "collect_contact"` with `pending_context = {reason, backlog_id?,
+mantis_issue_id?, mantis_issue_url?}`. Because it sits in `handle_turn`, all five paths
+(triage, knowledge unresolved, verified bug, and the guardrail fallback) get it without knowing about it; the refs come from `AgentResult.escalation_refs`,
+which only the verified-bug path fills. The gate must edit the session `_finish` saves
+(`result.new_session` when set), or a path returning its own session would lose the flag.
+
+The flag is **consumed on entry** to `_route`, before the verification/clarify branches,
+and never re-armed by itself: the user is asked once. `contact.parse` (regex, no LLM:
+a VN phone number or an email) decides what happens next. Found → `_attach_contact`
+writes the `ContactInfo` onto the conversation record, the backlog row
+(`RequestBacklog.set_contact`, a single-attribute update) and the MantisBT issue (as a
+**note**, `MantisClient.add_note` — the ticket was filed before the contact existed), then
+`Escalator.contact_update` tells CS again on both channels, and the reply is
+`CONTACT_THANKS_REPLY`. Each step is best-effort and independent. Not found → nothing is
+touched and the message is routed normally, because it is usually a new question.
+`ContactInfo.raw` keeps the whole message so CS also sees "gọi sau 5h chiều". Nothing is
+written to `CustomerProfile`.
+
+`mailer.py` (`CSMailer`) is the email side: Resend's HTTP API (`POST /emails`) over
+httpx, off unless `RESEND_API_KEY`, `CS_MAIL_FROM` and `CS_MAIL_TO` are set, never raises
+(a rejected send is logged with Resend's own `message`, e.g. an unverified `from` domain). `Escalator.escalate` posts to
+Zalo (still raises on an HTTP error) and then mails; the mail is sent even with no Zalo
+webhook, and carries the full transcript where Zalo is capped at 3000 chars.
+
 ### Storage
 
 | Store | Backend | Purpose |
 |---|---|---|
-| `SessionStore` | Redis | Turn-to-turn state (`active_flow_id`, `pending`, TTL-based) |
+| `SessionStore` | Redis | Turn-to-turn state (`pending`, `pending_context`, the routing counters, TTL-based) |
 | `ConversationStore` | DynamoDB | Full message history |
 | `CustomerRegistry` | DynamoDB | Customer profiles & enabled modules |
 | `FlowStore` | DynamoDB | Flow definitions (seeded via `scripts/import_flows.py`) |
@@ -192,12 +382,21 @@ an object-size check would cost an S3 HEAD per image on the request path.
 ### Citations and grounding
 
 An answer names its own sources. `_compose` returns a `ComposedAnswer`
-(`llm/schemas.py`) — `{answer, cited}` — instead of free text, and `citations.py` is the
-whole transform from that raw declaration to the source list the widget shows. This is a
-**hybrid** on purpose: `answer` still carries every marker inline (`[[clarify]]`,
-`[[no_answer]]`, `[[suspected_bug:…]]`, `[[img:…]]`) and `parse_markers` still reads them
-out of it, so the heavily tuned compose prompt was appended to, never rewritten. Only the
-citation list is promoted to a typed field.
+(`llm/schemas.py`) — `{answer, status, application, cited}` — instead of free text, and
+`citations.py` is the whole transform from that raw declaration to the source list the
+widget shows.
+
+`status` (`answer | clarify | no_answer | suspected_bug`) used to be a marker written
+inline in the prose and regexed back out; promoting it is what lets `routing.next_step`
+read a validated value instead of re-parsing text. **The `[[img:…]]` markers stay
+inline**, because they are positional — they mark *where* in the prose a screenshot
+belongs — so there is nothing to promote. Two pieces of the old mechanism survive for
+good reasons: `parse_markers` still serves the free-text retry in `_compose`, which has
+no schema to fill, and `_scrub_markers` still strips control markers from `answer`
+unconditionally, because a model told to use a field may write one into the prose out of
+habit. Where the prose and the field disagree, the field wins. `_resolve_status` also
+keeps the hedge rule: a full answer that *also* reports `no_answer` is a model hedging,
+measured on the prose with image markers stripped first.
 
 **The catalog, not the shape, is the guard** — the same rule, for the same reason, as
 `doc_images.select`. `citations.catalog` is built from this turn's `metas` *before*
@@ -267,9 +466,17 @@ fails OPEN.
 `unsupported_claims` as `{span, replacement, severity, reason}` (`GroundingVerdict` in
 `llm/schemas.py`): `span` is a verbatim substring of the reply, `replacement` is what it
 should become so the sentence stays grammatical (empty = delete), and `severity` is
-`minor` (extra but harmless, changes nothing the user does) or `critical` (wrong or
-invented step, button, number, condition). `Coordinator._repair_or_escalate` then climbs
-a ladder, cheapest rung first:
+`minor` (extra but harmless, changes nothing the user does).
+
+**`severity` is `Literal["minor"]` with no second member, deliberately.** The model
+therefore cannot emit `critical`, so `guardrail.only_minor` is true whenever the judge
+named a claim, and the repair rungs run on **every** first failure — which is the
+intent. Restoring a `critical` member would send those turns straight to escalation and
+skip the repair. The "any critical claim" wording in rung 3 below is the safety net for
+a schema that no longer produces one; it is unreachable on purpose, not dead by
+accident.
+
+`Coordinator._repair_or_escalate` climbs a ladder, cheapest rung first:
 
 1. **Python edit** — every claim is minor and `guardrail.apply_claims` can apply each
    replacement safely. **The replacement may only reuse the span's own words, in order**:
@@ -300,9 +507,15 @@ into a Langfuse span, and full passage text would bloat every trace.
 Citations are **not** persisted on the `Turn` — reloading history shows answers without
 their source lists.
 
-### Flows
+### Flows (parked — data layer only)
 
-`models.py` defines `Flow → FlowStep → FlowTransition → FlowOutcome`. `FlowEngine` (`flows/engine.py`) is a pure stateless resolver — `FlowAgent` uses it to advance `session.current_step_id`. Flow JSON files are seeded from `seeds/flows/` via `scripts/import_flows.py`.
+**There is no `FlowAgent`.** It was removed along with `SessionState.active_flow_id`, the
+only thing that carried a flow between turns, so nothing in the live pipeline runs a flow
+today. What remains is the data layer, kept so re-enabling means writing one agent again
+rather than re-deriving the schema: `models.py` defines `Flow → FlowStep → FlowTransition
+→ FlowOutcome`, `FlowEngine` (`flows/engine.py`) is a pure stateless resolver, `FlowStore`
+holds the definitions, and `seeds/flows/` is seeded via `scripts/import_flows.py`.
+`TurnContext.flow_store` is still wired but currently has no reader.
 
 ### Observability
 
@@ -317,6 +530,8 @@ See `.env-example`. The important runtime ones:
 - `JWT_SECRET` — signs access tokens; **no default, the server refuses to start without it**.
   Anyone holding it can mint an admin token for any customer. `JWT_EXPIRE_MINUTES` (default 480)
   is the token lifetime; there is no refresh token, so a token is valid until it expires.
+- `MANTIS_BASE_URL` / `MANTIS_API_TOKEN` / `MANTIS_PROJECT` — bug tickets; off unless the first two are set
+- `RESEND_API_KEY` / `CS_MAIL_FROM` / `CS_MAIL_TO` — CS notification email via Resend; off unless all three are set. `CS_MAIL_CC` (comma-separated, optional) adds CC recipients. `CS_MAIL_FROM` must be on a domain verified in Resend
 - `LANGFUSE_*` — optional tracing; leave blank to disable
 - `DYNAMODB_ENDPOINT_URL` — set to `http://localhost:8000` for local dev
 - `S3_ENDPOINT_URL` / `S3_BUCKET_ATTACHMENTS` — attachment storage; `http://localhost:4566` for LocalStack. `MAX_ATTACHMENT_BYTES` (default 5 MB) is the upload cap, `S3_PRESIGN_EXPIRY_SECONDS` (default 1h) the display-URL lifetime.

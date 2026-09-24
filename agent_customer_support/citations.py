@@ -191,7 +191,7 @@ def catalog(
     """Every id the composer may legally declare this turn, mapped to its Citation.
 
     `metas` is positionally aligned with the passages handed to the composer — that is
-    what `RagClient.search` returns and what `_passages_block` numbers — so passage i is
+    what `RagClient.search` returns and what `passages_block` numbers — so passage i is
     addressed as `"i"`. Q&A records are numbered separately as `"qa:i"` because they are
     numbered separately in the prompt too.
 

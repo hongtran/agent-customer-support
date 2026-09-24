@@ -14,12 +14,9 @@ class TriageAgent:
     name = "triage"
 
     async def run(self, ctx: TurnContext) -> AgentResult:
-        # Rule fast-paths (no LLM). Note this is the only way `flow` is ever chosen —
-        # which is why TriageDecision does not offer it as a target.
-        if ctx.session.active_flow_id:
-            return AgentResult(action="route", routed_to="flow")
+        # Rule fast-path (no LLM): an explicit request for a human never needs one.
         if _HUMAN_RE.search(ctx.message or ""):
-            return AgentResult(action="route", routed_to="escalate")
+            return AgentResult(routed_to="escalate")
 
         # Triage is route-only: clarification is owned by KnowledgeAgent, which has
         # the RAG context (and screenshots) needed to ask a useful follow-up.
@@ -33,4 +30,4 @@ class TriageAgent:
         # unknown-target cases, so this now fires only when there is no decision at
         # all — an API error, a refusal, or a truncated response.
         target = decision.target if decision else "knowledge"
-        return AgentResult(action="route", routed_to=target)
+        return AgentResult(routed_to=target)

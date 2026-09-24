@@ -4,6 +4,7 @@ import re
 from qdrant_client.http.exceptions import ApiException
 
 from agent_customer_support.agents.context import TurnContext
+from agent_customer_support.agents.passages import passages_block
 from agent_customer_support.agents.prompts import (
     KNOWLEDGE_CONTEXTUALIZE_PROMPT,
     KNOWLEDGE_CONTEXTUALIZE_VISION_PROMPT,
@@ -13,6 +14,7 @@ from agent_customer_support.agents.prompts import (
     KNOWLEDGE_REPAIR_INSTRUCTION,
     KNOWLEDGE_REPAIR_PROMPT,
     KNOWLEDGE_RESUME_NO_CLARIFY,
+    KNOWLEDGE_USER_ERROR_NOTE,
     PROCESS_BLOCK,
 )
 from agent_customer_support import citations as cite
@@ -53,6 +55,10 @@ def parse_markers(text: str) -> tuple[str, str | None, str | None]:
 
     Precedence: suspected_bug > clarify > no_answer. A bug is the safest handoff,
     so it wins if the model emits more than one marker.
+
+    The composer reports its status as a schema field now, so this survives for the
+    one caller that has no schema to read: the free-text retry in `_compose`, when
+    constrained decoding produced nothing.
     """
     bug = _BUG_RE.search(text or "")
     if bug:
@@ -71,30 +77,25 @@ def parse_markers(text: str) -> tuple[str, str | None, str | None]:
     return (text or "").strip(), None, None
 
 
-def _passages_block(passages: list[str], with_sections: bool = False) -> str:
-    """Number the passages for the composer, optionally listing each one's headings.
+def _resolve_status(composed: ComposedAnswer) -> tuple[str, str, str]:
+    """Return (clean_answer, status, application) from a composed reply.
 
-    The heading list turns "name the section you used" from a guess into a choice from a
-    closed set. Without it the model reaches for whatever looks most like a title, which
-    in this corpus is the summary line prepended to every chunk — not a heading at all,
-    so the declaration fails validation and the citation loses its section.
+    Two corrections are applied to what the model declared, in Python:
 
-    Reuses `cite.sections`, the same function `cite.select` validates the answer against.
-    Sharing that call is the point: the list the model reads and the whitelist it is
-    judged by cannot drift apart.
+    The hedge rule. A model that writes a full answer and ALSO reports "no_answer"
+    is hedging, not missing — trust the content. Measured on the prose only, because
+    image markers are ~40 chars each and counting them could tip a one-line hedge
+    over the threshold and suppress a real miss.
 
-    A passage with no headings gets no annotation rather than an empty one, and the Q&A
-    block never asks for annotation — CS records are authored prose and carry no headings.
+    And the markers are scrubbed from `answer` regardless. A model told to report its
+    status in a field may still write [[clarify]] into the prose out of habit; where
+    the two disagree the field wins, but neither may leak to the user.
     """
-    out = []
-    for i, p in enumerate(passages):
-        head = f"[{i}]"
-        if with_sections:
-            names = cite.sections(p)
-            if names:
-                head = f"{head} (các mục trong đoạn này: {' | '.join(names)})\n"
-        out.append(f"{head} {p}")
-    return "\n\n".join(out)
+    clean = _scrub_markers(composed.answer or "")
+    status = composed.status
+    if status == "no_answer" and len(doc_images.strip(clean)) > 80:
+        status = "answer"
+    return clean, status, (composed.application or "").strip()
 
 
 def _other_applications(metas: list[dict], selected: list[str] | None) -> list[str]:
@@ -174,6 +175,7 @@ class KnowledgeAgent:
         qa_leads: bool = False,
         other_applications: list[str] | None = None,
         selected_applications: list[str] | None = None,
+        user_error_hint: str = "",
     ) -> ComposedAnswer:
         """Compose a grounded answer from the always-on process + retrieved passages.
 
@@ -182,9 +184,9 @@ class KnowledgeAgent:
         supplementary. With no qa_passages, behavior is identical to the two-source
         path (default).
 
-        Returns the reply together with the sources the model says it used. The prose
-        itself is unchanged by this: `answer` still carries every marker inline, so
-        `parse_markers` reads it exactly as it read the old free-text return.
+        Returns the reply, the status it decided, and the sources it says it used.
+        Only the [[img:...]] markers still ride inline in the prose, because they are
+        positional; the control markers are the `status` field.
         """
         qa_passages = qa_passages or []
         if _HAS_PRIOR_TURN in transcript:
@@ -193,7 +195,7 @@ class KnowledgeAgent:
             history = ""
         content = (
             f"{history}Câu hỏi hiện tại: {question}\n\n"
-            f"Đoạn trích:\n{_passages_block(passages, with_sections=True)}"
+            f"Đoạn trích:\n{passages_block(passages, with_sections=True)}"
         )
         if qa_passages:
             header = (
@@ -201,7 +203,7 @@ class KnowledgeAgent:
                 if qa_leads
                 else "ĐÁP ÁN CS XÁC NHẬN — bổ trợ:"
             )
-            content = f"{content}\n\n{header}\n{_passages_block(qa_passages)}"
+            content = f"{content}\n\n{header}\n{passages_block(qa_passages)}"
             compose_prompt = KNOWLEDGE_COMPOSE_PROMPT_WITH_QA
         else:
             compose_prompt = KNOWLEDGE_COMPOSE_PROMPT
@@ -215,6 +217,10 @@ class KnowledgeAgent:
             )
         if not allow_clarify:
             content = f"{content}\n\n{KNOWLEDGE_RESUME_NO_CLARIFY}"
+        # Verification has already ruled this a user error, so the answer must explain
+        # the correct usage — and must not send the turn back for a second opinion.
+        if user_error_hint:
+            content = f"{content}\n\n" + KNOWLEDGE_USER_ERROR_NOTE.format(hint=user_error_hint)
         messages = [{"role": "user", "content": content}]
         system: list[dict] = [PROCESS_BLOCK, {"type": "text", "text": compose_prompt}]
         model = cfg.model_for("knowledge")
@@ -234,8 +240,15 @@ class KnowledgeAgent:
         # without its source list is strictly better than no answer. Same trade-off
         # Coordinator._store_attachments makes when S3 is down.
         logger.warning("compose returned no structured answer, retrying as free text")
+        # No schema on this path, so the status has to come back out of the prose the
+        # old way — this is the one caller `parse_markers` still exists for.
+        clean, kind, application = parse_markers(
+            complete_text(messages=messages, system=system, model=model) or ""
+        )
         return ComposedAnswer(
-            answer=complete_text(messages=messages, system=system, model=model),
+            answer=clean,
+            status=kind or "answer",  # type: ignore[arg-type]
+            application=application or "",
             cited=[],
         )
 
@@ -269,7 +282,7 @@ class KnowledgeAgent:
             lines.append(line)
         claims_block = "\n".join(lines)
         content = (
-            f"NGUỒN:\n{_passages_block(source_passages)}"
+            f"NGUỒN:\n{passages_block(source_passages)}"
             f"\n\nCÂU TRẢ LỜI:\n{reply}"
             f"\n\nÝ THIẾU CĂN CỨ:\n{claims_block}"
             f"\n\n{KNOWLEDGE_REPAIR_INSTRUCTION}"
@@ -343,24 +356,23 @@ class KnowledgeAgent:
                 catalog = await ctx.doc_images.catalog(slugs)
         return doc_images.rewrite_passages(passages, metas, catalog), catalog
 
-    async def run(self, ctx: TurnContext) -> AgentResult:
+    async def run(self, ctx: TurnContext, *, allow_clarify: bool = True) -> AgentResult:
         """
         Single-attempt pipeline:
           contextualize → search → compose (process always-on) → return result
 
-        On a miss (compose emits [[no_answer]] — neither process nor passages answer):
-          - first miss → ask ONE clarifying question (and invite a screenshot), so the
-            user can pin down a vague or jargon-y request; state kept in
-            session.pending = "knowledge_clarify" to bound this to a single attempt
-          - second miss (the clarification turn) → log to backlog and hand off
+        `allow_clarify` is the caller's: the coordinator owns `clarify_count` and the
+        session flag, so this agent decides only WHAT to say, never how many times it
+        is allowed to say it. With clarifying disallowed, a miss stops asking and
+        becomes a logged `no_answer` instead.
+
+        On a miss (compose reports status="no_answer" — neither process nor passages
+        answer) the first attempt asks ONE clarifying question and invites a
+        screenshot, so the user can pin down a vague or jargon-y request; once
+        clarifying is used up, the miss is logged to the backlog and handed off.
         suspected_bug returns immediately without backlog.
         """
         cfg = get_settings()
-        # If we asked a clarifying question last turn, this turn is the answer to it.
-        # Consume the flag now so we never clarify twice in a row.
-        already_clarified = ctx.session.pending == "knowledge_clarify"
-        if already_clarified:
-            ctx.session.pending = None
         query = await self._contextualize(ctx, cfg)
 
         applications = ctx.session.selected_applications or None
@@ -398,20 +410,21 @@ class KnowledgeAgent:
 
         # Always compose: the process context is always in the system prefix, so even
         # with no retrieved passages the model can answer process-level questions.
-        # The [[no_answer]] marker is the single miss signal — emitted only when
-        # neither the process nor the passages can answer.
+        # status="no_answer" is the single miss signal — reported only when neither the
+        # process nor the passages can answer.
         composed = await self._compose(
             query,
             passages,
             ctx.transcript,
             cfg,
-            allow_clarify=not already_clarified,
+            allow_clarify=allow_clarify,
             qa_passages=qa_passages,
             qa_leads=qa_leads,
             other_applications=other_applications,
             selected_applications=ctx.session.selected_applications,
+            user_error_hint=ctx.route_hint,
         )
-        clean, kind, application = parse_markers(composed.answer)
+        clean, status, application = _resolve_status(composed)
         # Enforce the image contract on whatever the composer produced: only markers this
         # turn's passages actually offered survive, deduped and capped. Checked against the
         # same catalog the passages were rewritten against, so an invented image number is
@@ -430,53 +443,57 @@ class KnowledgeAgent:
         cited_any = cite.passages_for(composed.cited, cite_catalog, passages, qa_passages)
         source_passages = [*passages, *qa_passages] if cited_any else []
 
-        if kind == "suspected_bug":
+        if status == "suspected_bug":
             return AgentResult(
                 reply=clean,
-                resolved=False,
-                suspected_bug=True,
-                evidence={"application": application, "summary": ctx.message},
+                knowledge_status="suspected_bug",
+                # `query` is the contextualized one: the verifier's doc check searches
+                # the guides again, and this retrieves better than the raw message.
+                evidence={
+                    "application": application or None,
+                    "summary": ctx.message,
+                    "query": query,
+                },
                 citations=citations,
                 source_passages=source_passages,
             )
 
         # Clarify / confirm before answering. The composer judged that an element it
         # can't see (ambiguous subject, unknown user-state, unverified premise, or a
-        # risky intent) materially changes the answer. Ask once — bounded by the same
-        # knowledge_clarify flag — then re-ground on the user's reply next turn.
-        # allow_clarify=False on the resume turn means compose should never reach here
-        # twice; if the model disobeys, downgrade to a plain (assumption-stated) answer.
-        if kind == "clarify":
-            if not already_clarified:
-                ctx.session.pending = "knowledge_clarify"
-                return AgentResult(reply=clean, resolved=None, citations=citations)
+        # risky intent) materially changes the answer. Ask, and let the coordinator
+        # count it. With clarifying already used up the compose prompt says not to reach
+        # here at all; if the model disobeys, downgrade to a plain answer rather than
+        # asking a question the router would only turn into a handoff.
+        if status == "clarify":
+            if allow_clarify:
+                return AgentResult(reply=clean, knowledge_status="clarify", citations=citations)
             return AgentResult(
                 reply=clean,
-                resolved=True,
+                knowledge_status="answer",
                 citations=citations,
                 source_passages=source_passages,
             )
 
-        if kind != "no_answer":
+        if status != "no_answer":
             return AgentResult(
                 reply=clean,
-                resolved=True,
+                knowledge_status="answer",
                 citations=citations,
                 source_passages=source_passages,
             )
 
-        # Miss. On the first one, try to disambiguate before giving up to a human:
-        # the request may just be vague or use the customer's own terminology.
-        if not already_clarified:
-            ctx.session.pending = "knowledge_clarify"
+        # Miss. While we may still clarify, try to disambiguate before giving up to a
+        # human: the request may just be vague or use the customer's own terminology.
+        if allow_clarify:
             return AgentResult(
                 reply="Mình chưa rõ ý bạn lắm. Bạn cho mình biết cụ thể hơn đang thao tác "
                 "ở màn hình/chức năng nào nhé — hoặc chụp giúp mình ảnh màn hình "
                 "đang xem để mình hỗ trợ nhanh hơn.",
-                resolved=None,
+                knowledge_status="clarify",
             )
 
-        # Second miss after a clarification: genuinely not in the KB — log and hand off.
+        # Out of clarifying attempts and still nothing: genuinely not in the KB — log
+        # and hand off.
         await ctx.backlog.add(
             customer_id=ctx.customer.customer_id,
             type="how_to_missing",
@@ -496,5 +513,5 @@ class KnowledgeAgent:
         return AgentResult(
             reply="Mình chưa tìm thấy thông tin cụ thể này trong tài liệu. "
             "Đã ghi nhận để đội hỗ trợ bổ sung.",
-            resolved=False,
+            knowledge_status="no_answer",
         )

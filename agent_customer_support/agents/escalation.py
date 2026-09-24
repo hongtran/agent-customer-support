@@ -7,10 +7,15 @@ _REPLY = "Mình đã chuyển yêu cầu của bạn cho nhân viên hỗ trợ.
 class EscalationAgent:
     name = "escalation"
 
-    async def run(self, ctx: TurnContext, *, reason: str = "escalation") -> AgentResult:
+    async def run(
+        self, ctx: TurnContext, *, reason: str = "escalation", note: str | None = None
+    ) -> AgentResult:
         await ctx.escalator.escalate(
             customer_id=ctx.customer.customer_id,
             reason=reason,
             transcript=ctx.transcript,
+            note=note,
         )
-        return AgentResult(reply=_REPLY, escalated=True, routed_to="escalate")
+        return AgentResult(
+            reply=_REPLY, escalated=True, routed_to="escalate", escalation_reason=reason
+        )
