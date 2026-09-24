@@ -30,8 +30,9 @@ def _report() -> BugReport:
     )
 
 
-async def _create(client: MantisClient, files=None):
+async def _create(client: MantisClient, files=None, handler_name=None):
     return await client.create_issue(
+        handler_name=handler_name,
         report=_report(),
         customer_id="c1",
         customer_name="Công ty ABC",
@@ -186,3 +187,35 @@ async def test_add_note_disabled_makes_no_call():
     route = respx.post(f"{BASE}/api/rest/issues/7/notes").mock(return_value=httpx.Response(201))
     assert await _client(api_token="").add_note(7, "x") is False
     assert not route.called
+
+
+@respx.mock
+async def test_handler_is_sent_only_when_set():
+    route = respx.post(f"{BASE}/api/rest/issues").mock(
+        return_value=httpx.Response(201, json={"issue": {"id": 7}})
+    )
+    await _create(_client())
+    assert "handler" not in json.loads(route.calls[0].request.content)
+    await _create(_client(), handler_name="nguyenvana")
+    assert json.loads(route.calls[1].request.content)["handler"] == {"name": "nguyenvana"}
+
+
+@respx.mock
+async def test_rejected_handler_files_the_ticket_unassigned():
+    route = respx.post(f"{BASE}/api/rest/issues").mock(
+        side_effect=[
+            httpx.Response(400, json={"message": "User not found"}),
+            httpx.Response(201, json={"issue": {"id": 8}}),
+        ]
+    )
+    issue = await _create(_client(), handler_name="no-such-user")
+    assert issue is not None and issue.id == 8
+    assert len(route.calls) == 2
+    assert "handler" not in json.loads(route.calls[1].request.content)
+
+
+@respx.mock
+async def test_server_error_with_handler_is_not_retried():
+    route = respx.post(f"{BASE}/api/rest/issues").mock(return_value=httpx.Response(500))
+    assert await _create(_client(), handler_name="nguyenvana") is None
+    assert len(route.calls) == 1

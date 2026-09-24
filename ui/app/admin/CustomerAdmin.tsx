@@ -19,6 +19,8 @@ type Draft = {
   role: Role;
   enabled_applications: string[];
   daily_question_limit: number | null;
+  manager_email: string | null;
+  mantis_handler_name: string | null;
 };
 
 /** Empty input = unlimited (null); anything else is a non-negative whole number. */
@@ -35,7 +37,56 @@ const EMPTY_DRAFT: Draft = {
   role: "user",
   enabled_applications: [],
   daily_question_limit: null,
+  manager_email: null,
+  mantis_handler_name: null,
 };
+
+type Manager = Pick<Draft, "manager_email" | "mantis_handler_name">;
+
+/** The two "who manages this customer" inputs, shared by the create and edit forms. */
+function ManagerFields({
+  value,
+  onChange,
+  labelCls,
+  inputCls,
+}: {
+  value: Manager;
+  onChange: (v: Manager) => void;
+  labelCls: string;
+  inputCls: string;
+}) {
+  return (
+    <>
+      <div>
+        <label className={labelCls}>Email người phụ trách</label>
+        <input
+          type="email"
+          value={value.manager_email ?? ""}
+          onChange={(e) => onChange({ ...value, manager_email: e.target.value || null })}
+          placeholder="Để trống nếu không có"
+          className={inputCls}
+        />
+        <p className="mt-1 text-xs text-gray-400">
+          Nhận CC email khi khách báo lỗi hoặc câu hỏi chưa được trả lời.
+        </p>
+      </div>
+
+      <div>
+        <label className={labelCls}>Tài khoản Mantis người phụ trách</label>
+        <input
+          value={value.mantis_handler_name ?? ""}
+          onChange={(e) => onChange({ ...value, mantis_handler_name: e.target.value || null })}
+          placeholder="Tên đăng nhập Mantis, ví dụ: nguyenvana"
+          className={`${inputCls} font-mono`}
+        />
+        <p className="mt-1 text-xs text-gray-400">
+          Ticket lỗi sẽ được giao cho tài khoản này. Nhập tên đăng nhập Mantis, không phải tên
+          hiển thị.
+        </p>
+      </div>
+    </>
+  );
+}
 
 function RoleBadge({ role }: { role: Role }) {
   const cls =
@@ -109,6 +160,8 @@ export default function CustomerAdmin() {
         role: draft.role,
         enabled_applications: draft.enabled_applications,
         daily_question_limit: draft.daily_question_limit,
+        manager_email: draft.manager_email,
+        mantis_handler_name: draft.mantis_handler_name,
       });
       setCreating(false);
       setDraft(EMPTY_DRAFT);
@@ -135,6 +188,9 @@ export default function CustomerAdmin() {
         enabled_applications: sel.enabled_applications,
         // Always sent, null included: an explicit null is how "unlimited" is saved.
         daily_question_limit: sel.daily_question_limit,
+        // Also always sent: null is how CS removes the manager.
+        manager_email: sel.manager_email,
+        mantis_handler_name: sel.mantis_handler_name,
         // Only send a password when one was typed — an empty field must leave the
         // existing credentials alone, not wipe them.
         ...(newPassword ? { password: newPassword } : {}),
@@ -299,6 +355,13 @@ export default function CustomerAdmin() {
                 />
               </div>
 
+              <ManagerFields
+                value={draft}
+                onChange={(m) => setDraft({ ...draft, ...m })}
+                labelCls={labelCls}
+                inputCls={inputCls}
+              />
+
               <div className="flex items-center gap-2 pt-2">
                 <button
                   onClick={onCreate}
@@ -388,6 +451,13 @@ export default function CustomerAdmin() {
                     : `Đã dùng hôm nay: ${sel.questions_used_today} câu hỏi. Đặt lại lúc 0h (giờ Việt Nam).`}
                 </p>
               </div>
+
+              <ManagerFields
+                value={sel}
+                onChange={(m) => setSel({ ...sel, ...m })}
+                labelCls={labelCls}
+                inputCls={inputCls}
+              />
 
               <div>
                 <label className={labelCls}>Đặt lại mật khẩu</label>

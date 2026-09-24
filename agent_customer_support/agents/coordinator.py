@@ -204,38 +204,40 @@ class Coordinator:
     async def _repair_or_escalate(
         self, ctx: TurnContext, result: AgentResult, gout: dict
     ) -> tuple[AgentResult, str | None]:
-        """Rescue a flagged reply when the judge found only minor problems; else hand off.
+        """Rescue a flagged reply by repairing the claims the judge named; else hand off.
 
-        Three rungs, cheapest first, and the second tag says which one rescued it:
+        Every named claim gets a repair attempt, whatever its severity. Three rungs,
+        cheapest first, and the second tag says which one rescued it:
           1. "python"  — every claim is minor and `apply_claims` can delete each span
              safely. No further judge call: Python removed exactly the text the judge
              named, so re-judging would spend a call to confirm the judge's own list.
-          2. "llm"     — every claim is minor but a span was not safely deletable (a
+          2. "llm"     — a major claim, or a span Python could not safely edit (a
              whole sentence, or text not found exactly once). One repair call in
              KnowledgeAgent, then the judge sees the repaired reply once more.
-          3. None      — any critical claim, no named claim at all, or a repair that
-             still fails: escalate exactly as before.
+          3. None      — no named claim at all, or a repair that still fails: escalate
+             exactly as before. With no claim the repair model would be told to fix
+             nothing, so it is not called.
 
         Citations survive a repair: a repair may delete or reword, never add, so the
         sources still vouch for what remains. They are dropped only on escalation,
         where they would vouch for text the user never sees.
         """
         claims = gout.get("unsupported_claims") or []
-        # if only_minor(claims):
-        stripped = apply_claims(result.reply, claims)
-        if stripped is not None:
-            logger.info("ungrounded reply repaired in python: %s", gout.get("reason"))
-            result.reply = stripped
-            return result, "python"
-        with tracing.agent_span("knowledge", input={"claims": claims}) as sp:
-            fixed = await self.knowledge.repair(result.reply, claims, result.source_passages)
-            sp.update(output={"repaired": fixed})
-        if fixed:
-            recheck = await self.guardrail.check_output(fixed, result.source_passages)
-            if recheck["pass"]:
-                logger.info("ungrounded reply repaired by llm: %s", gout.get("reason"))
-                result.reply = fixed
-                return result, "llm"
+        if claims:
+            stripped = apply_claims(result.reply, claims)
+            if stripped is not None:
+                logger.info("ungrounded reply repaired in python: %s", gout.get("reason"))
+                result.reply = stripped
+                return result, "python"
+            with tracing.agent_span("knowledge", input={"claims": claims}) as sp:
+                fixed = await self.knowledge.repair(result.reply, claims, result.source_passages)
+                sp.update(output={"repaired": fixed})
+            if fixed:
+                recheck = await self.guardrail.check_output(fixed, result.source_passages)
+                if recheck["pass"]:
+                    logger.info("ungrounded reply repaired by llm: %s", gout.get("reason"))
+                    result.reply = fixed
+                    return result, "llm"
         logger.warning("ungrounded reply, escalating: %s", gout.get("reason"))
         # Hand off rather than dead-end. We already know the composed answer cannot be
         # trusted, and the citations belonged to that answer — dropping them keeps a
@@ -455,6 +457,7 @@ class Coordinator:
             application=verify.application,
             transcript=ctx.transcript,
             files=files,
+            handler_name=ctx.customer.mantis_handler_name,
         )
         rec = await self.backlog.add(
             customer_id=ctx.customer.customer_id,

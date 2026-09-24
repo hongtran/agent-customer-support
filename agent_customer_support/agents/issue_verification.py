@@ -129,7 +129,6 @@ class IssueVerificationAgent:
                         evidence=verify.model_dump(),
                     )
         logger.warning(verify.model_dump_json(indent=2, ensure_ascii=False))
-        logger.warning(f"Evidence images: {ctx.evidence_images}")
         decision = complete_structured(
             messages=messages
             + [{"role": "user", "content": _note_content(verify, ctx, to_content)}],

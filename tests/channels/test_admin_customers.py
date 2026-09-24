@@ -122,6 +122,35 @@ def test_patch_can_change_role_and_applications(client, reg):
     assert reg.by_id["ttp"].enabled_applications == ["Phòng thí nghiệm"]
 
 
+def test_create_stores_the_manager(client, reg):
+    r = _create(client, manager_email=" lead@cenlab.vn ", mantis_handler_name=" nguyenvana ")
+    assert r.status_code == 201
+    assert r.json()["manager_email"] == "lead@cenlab.vn"
+    assert r.json()["mantis_handler_name"] == "nguyenvana"
+    assert reg.by_id["newco"].manager_email == "lead@cenlab.vn"
+    assert reg.by_id["newco"].mantis_handler_name == "nguyenvana"
+
+
+def test_create_rejects_a_bad_manager_email(client, reg):
+    assert _create(client, manager_email="not-an-email").status_code == 422
+
+
+def test_patch_sets_keeps_and_clears_the_manager(client, reg):
+    body = {"manager_email": "lead@cenlab.vn", "mantis_handler_name": "nguyenvana"}
+    assert client.patch("/admin/customers/ttp", json=body).status_code == 200
+    # Absent fields leave the manager alone.
+    client.patch("/admin/customers/ttp", json={"name": "TTP 2"})
+    assert reg.by_id["ttp"].manager_email == "lead@cenlab.vn"
+    assert reg.by_id["ttp"].mantis_handler_name == "nguyenvana"
+    # An explicit null or an emptied (blank) field clears it.
+    r = client.patch(
+        "/admin/customers/ttp", json={"manager_email": "", "mantis_handler_name": "  "}
+    )
+    assert r.status_code == 200
+    assert reg.by_id["ttp"].manager_email is None
+    assert reg.by_id["ttp"].mantis_handler_name is None
+
+
 def test_patch_unknown_customer_is_404(client, reg):
     assert client.patch("/admin/customers/nobody", json={"name": "x"}).status_code == 404
 

@@ -347,17 +347,18 @@ async def test_a_repair_that_returns_nothing_escalates():
     assert c.guardrail.check_output.await_count == 1
 
 
-async def test_a_critical_claim_escalates_without_any_repair_attempt():
+async def test_a_major_claim_skips_python_and_goes_to_the_llm_repair():
     c = _flagged_coord(
         [
             {"span": "Đang sử dụng, ", "severity": "minor", "reason": "thừa"},
-            {"span": "Tạo mới", "severity": "critical", "reason": "sai nút"},
+            {"span": "Tạo mới", "severity": "major", "reason": "sai nút"},
         ]
     )
     res = await _turn(c)
+    # The repair mock returns None, so the turn still hands off -- but only after trying.
+    c.knowledge.repair.assert_awaited_once()
     assert res.escalated is True
     assert res.citations == []
-    c.knowledge.repair.assert_not_awaited()
     assert c.guardrail.check_output.await_count == 1
 
 

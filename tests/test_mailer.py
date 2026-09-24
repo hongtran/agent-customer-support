@@ -81,3 +81,19 @@ async def test_cc_list_is_sent_when_set():
 
 async def test_cc_alone_does_not_enable_the_mailer():
     assert _mailer(to="", cc="lead@x.vn").enabled is False
+
+
+@respx.mock
+async def test_per_send_cc_is_merged_with_config_cc_and_deduped():
+    route = respx.post(URL).mock(return_value=httpx.Response(200, json={"id": "e1"}))
+    m = _mailer(cc="lead@x.vn")
+    await m.send(subject="s", body="b", cc=["boss@x.vn", "lead@x.vn", "cs1@example.vn"])
+    # An address already in `to` is not repeated as CC.
+    assert json.loads(route.calls.last.request.content)["cc"] == ["lead@x.vn", "boss@x.vn"]
+
+
+@respx.mock
+async def test_per_send_cc_alone_is_sent():
+    route = respx.post(URL).mock(return_value=httpx.Response(200, json={"id": "e1"}))
+    await _mailer(cc="").send(subject="s", body="b", cc=["boss@x.vn"])
+    assert json.loads(route.calls.last.request.content)["cc"] == ["boss@x.vn"]

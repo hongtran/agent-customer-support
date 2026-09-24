@@ -1,9 +1,17 @@
 import base64
+import re
 from binascii import Error as BinasciiError
 from datetime import datetime, UTC
 from typing import Annotated, Literal
 from uuid import uuid4
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+)
 
 
 def _now() -> datetime:
@@ -53,6 +61,34 @@ Role = Literal["admin", "user"]
 CustomerId = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9._-]{1,64}$")]
 
 
+_EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+
+
+def _normalize_email(v: object) -> object:
+    """Trim; an empty string means "no manager" (an emptied form field clears it)."""
+    if not isinstance(v, str):
+        return v
+    v = v.strip()
+    if not v:
+        return None
+    if not _EMAIL_RE.fullmatch(v):
+        raise ValueError(f"invalid email {v!r}")
+    return v
+
+
+def _blank_to_none(v: object) -> object:
+    """Trim; an empty string means "not set" (an emptied form field clears it)."""
+    if not isinstance(v, str):
+        return v
+    return v.strip() or None
+
+
+# Types rather than field validators so the admin API models share the same checks.
+ManagerEmail = Annotated[str | None, BeforeValidator(_normalize_email)]
+# A MantisBT username (the login name, not the display name).
+MantisUserName = Annotated[str | None, BeforeValidator(_blank_to_none)]
+
+
 class CustomerProfile(BaseModel):
     customer_id: CustomerId
     name: str
@@ -67,6 +103,12 @@ class CustomerProfile(BaseModel):
     # before rate limiting existed looks like. Admins are never limited. The running count
     # lives in UsageStore, not here — see there for why.
     daily_question_limit: int | None = Field(default=None, ge=0)
+    # The CenLab employee who manages this customer. The email is CC'd on the handoff
+    # mail for a verified bug or an unanswered question; the MantisBT username is the
+    # assignee (`handler`) of a verified-bug ticket. A name, not the numeric id, so CS
+    # can read in the form who manages the customer. Both optional: None = nobody.
+    manager_email: ManagerEmail = None
+    mantis_handler_name: MantisUserName = None
 
 
 # ---- Attachments ----
