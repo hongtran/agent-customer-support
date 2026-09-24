@@ -27,14 +27,16 @@ class CSMailer:
         api_url: str | None = None,
         sender: str | None = None,
         to: str | None = None,
+        cc: str | None = None,
         timeout_seconds: int | None = None,
     ) -> None:
         cfg = get_settings()
         self.api_key = api_key if api_key is not None else cfg.resend_api_key
         self.api_url = api_url if api_url is not None else cfg.resend_api_url
         self.sender = sender if sender is not None else cfg.cs_mail_from
-        raw_to = to if to is not None else cfg.cs_mail_to
-        self.recipients = [r.strip() for r in raw_to.split(",") if r.strip()]
+        self.recipients = _split(to if to is not None else cfg.cs_mail_to)
+        # Optional: CC alone does not enable the mailer, `to` is still required.
+        self.cc = _split(cc if cc is not None else cfg.cs_mail_cc)
         self.timeout = timeout_seconds or cfg.cs_mail_timeout_seconds
 
     @property
@@ -50,7 +52,11 @@ class CSMailer:
         with tracing.span(
             "tool.cs_mail.send",
             as_type="tool",
-            input={"subject": subject, "recipients": len(self.recipients)},
+            input={
+                "subject": subject,
+                "recipients": len(self.recipients),
+                "cc": len(self.cc),
+            },
         ) as sp:
             try:
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -58,12 +64,7 @@ class CSMailer:
                         self.api_url,
                         # Never log this header.
                         headers={"Authorization": f"Bearer {self.api_key}"},
-                        json={
-                            "from": self.sender,
-                            "to": self.recipients,
-                            "subject": subject,
-                            "text": body,
-                        },
+                        json=self._payload(subject, body),
                     )
                 if resp.is_error:
                     # Resend explains itself in `message` (e.g. an unverified `from`
@@ -82,6 +83,24 @@ class CSMailer:
                 return False
             sp.update(output={"sent": True})
         return True
+
+    def _payload(self, subject: str, body: str) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "from": self.sender,
+            "to": self.recipients,
+            "subject": subject,
+            "text": body,
+        }
+        # Left out when empty rather than sent as [], so a mailer with no CC sends
+        # exactly the request it always did.
+        if self.cc:
+            payload["cc"] = self.cc
+        return payload
+
+
+def _split(raw: str) -> list[str]:
+    """Comma-separated addresses → trimmed list, blanks dropped."""
+    return [r.strip() for r in raw.split(",") if r.strip()]
 
 
 def _error_message(resp: httpx.Response) -> str:

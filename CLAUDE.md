@@ -531,7 +531,7 @@ See `.env-example`. The important runtime ones:
   Anyone holding it can mint an admin token for any customer. `JWT_EXPIRE_MINUTES` (default 480)
   is the token lifetime; there is no refresh token, so a token is valid until it expires.
 - `MANTIS_BASE_URL` / `MANTIS_API_TOKEN` / `MANTIS_PROJECT` — bug tickets; off unless the first two are set
-- `RESEND_API_KEY` / `CS_MAIL_FROM` / `CS_MAIL_TO` — CS notification email via Resend; off unless all three are set. `CS_MAIL_FROM` must be on a domain verified in Resend
+- `RESEND_API_KEY` / `CS_MAIL_FROM` / `CS_MAIL_TO` — CS notification email via Resend; off unless all three are set. `CS_MAIL_CC` (comma-separated, optional) adds CC recipients. `CS_MAIL_FROM` must be on a domain verified in Resend
 - `LANGFUSE_*` — optional tracing; leave blank to disable
 - `DYNAMODB_ENDPOINT_URL` — set to `http://localhost:8000` for local dev
 - `S3_ENDPOINT_URL` / `S3_BUCKET_ATTACHMENTS` — attachment storage; `http://localhost:4566` for LocalStack. `MAX_ATTACHMENT_BYTES` (default 5 MB) is the upload cap, `S3_PRESIGN_EXPIRY_SECONDS` (default 1h) the display-URL lifetime.

@@ -65,3 +65,19 @@ async def test_disabled_without_key_sender_or_recipients_makes_no_call(missing):
 async def test_recipients_list_is_split_and_trimmed():
     m = _mailer(to=" a@x.vn ,b@x.vn,, ")
     assert m.recipients == ["a@x.vn", "b@x.vn"]
+
+
+@respx.mock
+async def test_cc_list_is_sent_when_set():
+    route = respx.post(URL).mock(return_value=httpx.Response(200, json={"id": "e1"}))
+    m = _mailer(cc=" lead@x.vn ,, boss@x.vn ")
+    assert m.cc == ["lead@x.vn", "boss@x.vn"]
+    assert await m.send(subject="s", body="b") is True
+    assert json.loads(route.calls.last.request.content)["cc"] == [
+        "lead@x.vn",
+        "boss@x.vn",
+    ]
+
+
+async def test_cc_alone_does_not_enable_the_mailer():
+    assert _mailer(to="", cc="lead@x.vn").enabled is False

@@ -104,6 +104,7 @@ class Settings(BaseSettings):
     resend_api_url: str = "https://api.resend.com/emails"
     cs_mail_from: str = ""
     cs_mail_to: str = ""  # comma-separated recipients
+    cs_mail_cc: str = ""  # comma-separated, optional
     cs_mail_timeout_seconds: int = 15
 
     # Auth. jwt_secret has no usable default on purpose — a shipped signing secret is

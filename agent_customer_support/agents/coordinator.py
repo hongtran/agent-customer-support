@@ -532,16 +532,16 @@ class Coordinator:
                 refs["mantis_issue_id"],
                 f"Liên hệ khách hàng: {describe(contact)}\n{contact.raw}",
             )
-        try:
-            await self.escalator.contact_update(
-                customer_id=customer_id,
-                customer_name=ctx.customer.name,
-                reason=refs.get("reason"),
-                contact=contact,
-                ticket_url=refs.get("mantis_issue_url"),
-            )
-        except Exception as exc:  # noqa: BLE001 - degrade
-            logger.warning("CS contact notification failed: %s", exc)
+        # try:
+        #     await self.escalator.contact_update(
+        #         customer_id=customer_id,
+        #         customer_name=ctx.customer.name,
+        #         reason=refs.get("reason"),
+        #         contact=contact,
+        #         ticket_url=refs.get("mantis_issue_url"),
+        #     )
+        # except Exception as exc:  # noqa: BLE001 - degrade
+        #     logger.warning("CS contact notification failed: %s", exc)
         return AgentResult(reply=CONTACT_THANKS_REPLY)
 
     async def _evidence_files(self, ctx: TurnContext, since_turn: int | None) -> list[MantisFile]:
