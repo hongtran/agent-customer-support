@@ -8,7 +8,7 @@ ReasoningEffort = Literal["minimal", "low", "medium", "high"]
 
 # Enforced per-environment reasoning profile. Deliberately not overridable by env
 # vars: prod always reasons hard, dev always stays cheap and fast.
-_REASONING_EFFORT_BY_ENV: dict[str, ReasoningEffort] = {"dev": "low", "prod": "high"}
+_REASONING_EFFORT_BY_ENV: dict[str, ReasoningEffort] = {"dev": "low", "prod": "medium"}
 
 # On reasoning models the cap covers reasoning tokens *plus* visible output, so it
 # has to sit well above the old 5000 — otherwise a high-effort turn can burn the
