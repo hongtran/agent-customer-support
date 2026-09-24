@@ -269,6 +269,10 @@ export interface Customer {
   /** Questions per day; null = unlimited. Admins are never limited. */
   daily_question_limit: number | null;
   questions_used_today: number;
+  /** Manager CC'd on bug / unanswered-question handoff mail; null = none. */
+  manager_email: string | null;
+  /** MantisBT username a verified-bug ticket is assigned to; null = unassigned. */
+  mantis_handler_name: string | null;
 }
 
 export interface CustomerCreate {
@@ -279,6 +283,8 @@ export interface CustomerCreate {
   enabled_applications?: string[];
   config_notes?: string | null;
   daily_question_limit?: number | null;
+  manager_email?: string | null;
+  mantis_handler_name?: string | null;
 }
 
 export type CustomerPatch = Partial<Omit<CustomerCreate, "customer_id">>;

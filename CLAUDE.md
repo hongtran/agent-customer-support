@@ -266,6 +266,13 @@ paid for, so a tracker outage costs the ticket only: the backlog row is still wr
 MantisBT goes before the backlog write so the row carries the ticket id in its single
 `put_item`; there is no update path. Only the "verified bug" route files a ticket.
 
+**The ticket is assigned to the customer's manager.** `CustomerProfile.mantis_handler_name`
+(a MantisBT **username**, set in the admin form) becomes `"handler": {"name": …}` — a
+name, not the numeric id, so CS can see in the form who manages the customer. MantisBT
+rejects the whole issue when that user does not exist or cannot see the project, so a 4xx
+on a create **with** a handler is retried once without it: a typo in the form costs the
+assignment, not the ticket.
+
 Evidence is **every image since the bug was suspected, and nothing before it**:
 `_new_verify_context` stamps `since_turn` with the index the current
 turn will get, and `_evidence_files` walks user turns from there (S3 keys, read back via
@@ -303,6 +310,13 @@ httpx, off unless `RESEND_API_KEY`, `CS_MAIL_FROM` and `CS_MAIL_TO` are set, nev
 (a rejected send is logged with Resend's own `message`, e.g. an unverified `from` domain). `Escalator.escalate` posts to
 Zalo (still raises on an HTTP error) and then mails; the mail is sent even with no Zalo
 webhook, and carries the full transcript where Zalo is capped at 3000 chars.
+
+**Only three handoff reasons notify anyone.** `EscalationAgent` calls
+`Escalator.escalate` only for `NOTIFY_REASONS` — `verified bug`, `knowledge unresolved`,
+`clarify limit`. Every other reason (`user requested human`, `hop limit`, `bug loop`,
+`ungrounded answer`) returns the same handoff reply and result shape (so the contact gate
+still runs) but pages nobody. On a notified handoff, `CustomerProfile.manager_email` is
+added as CC on top of `CS_MAIL_CC`; `CS_MAIL_TO` still gets every mail.
 
 ### Storage
 
@@ -466,15 +480,12 @@ fails OPEN.
 `unsupported_claims` as `{span, replacement, severity, reason}` (`GroundingVerdict` in
 `llm/schemas.py`): `span` is a verbatim substring of the reply, `replacement` is what it
 should become so the sentence stays grammatical (empty = delete), and `severity` is
-`minor` (extra but harmless, changes nothing the user does).
+`minor` (extra but harmless, changes nothing the user does) or `major` (wrong or invented).
 
-**`severity` is `Literal["minor"]` with no second member, deliberately.** The model
-therefore cannot emit `critical`, so `guardrail.only_minor` is true whenever the judge
-named a claim, and the repair rungs run on **every** first failure — which is the
-intent. Restoring a `critical` member would send those turns straight to escalation and
-skip the repair. The "any critical claim" wording in rung 3 below is the safety net for
-a schema that no longer produces one; it is unreachable on purpose, not dead by
-accident.
+**`severity` is `minor | major`, but it does not gate the repair.** Every first failure
+whose judge named at least one claim is repaired; severity only decides the rung, because
+`apply_claims` edits minor claims only. Do not put a severity check back in front of the
+ladder — that would send major-claim turns straight to escalation and skip the repair.
 
 `Coordinator._repair_or_escalate` climbs a ladder, cheapest rung first:
 
@@ -488,18 +499,19 @@ accident.
    markers must survive, and the reply must keep some prose. All-or-nothing. The result
    is **not re-judged**: Python applied exactly the edit the judge named, so a second
    call would only confirm the judge's own list.
-2. **LLM repair** — every claim is minor but Python refused. One `KnowledgeAgent.repair`
+2. **LLM repair** — a major claim, or Python refused. One `KnowledgeAgent.repair`
    call (`llm.knowledge.repair`) with the same cited passages and the instruction "Xóa hoặc
    sửa các ý sau cho khớp với nguồn. Không thêm ý mới."; an image marker the original did
    not carry is dropped in code. The repaired reply **is** judged once more.
-3. **Escalate** — any critical claim, a failure with no named claim, or a repair that still
-   fails: the reply is replaced with `_FALLBACK_REPLY` and handed off, and its citations are
-   dropped — they vouched for text the user will never see. A repaired reply keeps its
-   citations, since a repair can only delete or reword, never add a source.
+3. **Escalate** — a failure with no named claim (the repair call is skipped: it would be
+   told to fix nothing), or a repair that still fails: the reply is replaced with
+   `_FALLBACK_REPLY` and handed off, and its citations are dropped — they vouched for text
+   the user will never see. A repaired reply keeps its citations, since a repair can only
+   delete or reword, never add a source.
 
-`eval/guardrail_eval.py` computes a `repair_path` column from the same two pure functions,
-so a run shows how many false escalations the ladder would rescue before any repair call
-is paid for.
+`eval/guardrail_eval.py` computes a `repair_path` column with the same rules
+(`repair_path` must be kept in step with `_repair_or_escalate`), then runs that rung and
+re-judges its output into the `repaired_*` columns.
 
 `source_passages` carries `exclude=True`: `Coordinator._traced` dumps every `AgentResult`
 into a Langfuse span, and full passage text would bloat every trace.

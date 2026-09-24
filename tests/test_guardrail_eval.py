@@ -186,10 +186,17 @@ def test_repair_path_is_llm_when_only_minor_but_python_refuses():
     assert ge.repair_path(verdict, _ANSWER) == "llm"
 
 
-def test_repair_path_is_escalate_on_a_critical_claim_or_no_claims():
-    crit = {"span": "Tạo mới", "severity": "critical", "reason": "sai nút"}
-    verdict = {"pass": False, "reason": "x", "unsupported_claims": [_minor("Đang sử dụng, "), crit]}
-    assert ge.repair_path(verdict, _ANSWER) == "escalate"
+def test_repair_path_is_llm_on_a_major_claim():
+    major = {"span": "Tạo mới", "severity": "major", "reason": "sai nút"}
+    verdict = {
+        "pass": False,
+        "reason": "x",
+        "unsupported_claims": [_minor("Đang sử dụng, "), major],
+    }
+    assert ge.repair_path(verdict, _ANSWER) == "llm"
+
+
+def test_repair_path_is_escalate_with_no_claims():
     assert (
         ge.repair_path({"pass": False, "reason": "ungrounded", "unsupported_claims": []}, _ANSWER)
         == "escalate"
@@ -304,9 +311,8 @@ async def test_llm_path_with_no_repaired_text_is_a_final_escalation(monkeypatch)
 
 async def test_escalate_path_runs_nothing(monkeypatch):
     knowledge, guardrail = _patched_agents(monkeypatch, "unused", True)
-    crit = {"span": "Tạo mới", "severity": "critical", "reason": "sai nút"}
     cols, cost = await ge.repair_outcome(
-        {"pass": False, "reason": "x", "unsupported_claims": [crit]}, _ANSWER, ["p"]
+        {"pass": False, "reason": "x", "unsupported_claims": []}, _ANSWER, ["p"]
     )
     assert cols["repair_path"] == "escalate"
     assert cols["final_escalated"] is True

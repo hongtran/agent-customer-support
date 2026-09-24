@@ -14,7 +14,6 @@ import logging
 import httpx
 
 from agent_customer_support.config import get_settings
-from agent_customer_support.observability import tracing
 
 logger = logging.getLogger(__name__)
 
@@ -44,47 +43,38 @@ class CSMailer:
         # Resend rejects a send with no `from`, so the sender is required too.
         return bool(self.api_key and self.sender and self.recipients)
 
-    async def send(self, *, subject: str, body: str) -> bool:
+    async def send(self, *, subject: str, body: str, cc: list[str] | None = None) -> bool:
+        """`cc` adds per-send recipients (e.g. the customer's manager) on top of
+        CS_MAIL_CC; it does not enable the mailer on its own."""
         if not self.enabled:
             logger.info("CS mail not configured; skipped: %s", subject)
             return False
-        # The body carries the transcript, so only the subject reaches the trace.
-        with tracing.span(
-            "tool.cs_mail.send",
-            as_type="tool",
-            input={
-                "subject": subject,
-                "recipients": len(self.recipients),
-                "cc": len(self.cc),
-            },
-        ) as sp:
-            try:
-                async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    resp = await client.post(
-                        self.api_url,
-                        # Never log this header.
-                        headers={"Authorization": f"Bearer {self.api_key}"},
-                        json=self._payload(subject, body),
-                    )
-                if resp.is_error:
-                    # Resend explains itself in `message` (e.g. an unverified `from`
-                    # domain); the bare status code would not.
-                    logger.warning(
-                        "CS mail rejected (%s): %s %s",
-                        subject,
-                        resp.status_code,
-                        _error_message(resp),
-                    )
-                    sp.update(output={"error": resp.status_code})
-                    return False
-            except Exception as exc:  # noqa: BLE001 - degrade, never break the turn
-                logger.warning("CS mail failed (%s): %s", subject, exc)
-                sp.update(output={"error": str(exc)})
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                resp = await client.post(
+                    self.api_url,
+                    # Never log this header.
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    json=self._payload(subject, body, cc),
+                )
+            if resp.is_error:
+                # Resend explains itself in `message` (e.g. an unverified `from`
+                # domain); the bare status code would not.
+                logger.warning(
+                    "CS mail rejected (%s): %s %s",
+                    subject,
+                    resp.status_code,
+                    _error_message(resp),
+                )
                 return False
-            sp.update(output={"sent": True})
+        except Exception as exc:  # noqa: BLE001 - degrade, never break the turn
+            logger.warning("CS mail failed (%s): %s", subject, exc)
+            return False
         return True
 
-    def _payload(self, subject: str, body: str) -> dict[str, object]:
+    def _payload(
+        self, subject: str, body: str, extra_cc: list[str] | None = None
+    ) -> dict[str, object]:
         payload: dict[str, object] = {
             "from": self.sender,
             "to": self.recipients,
@@ -93,8 +83,10 @@ class CSMailer:
         }
         # Left out when empty rather than sent as [], so a mailer with no CC sends
         # exactly the request it always did.
-        if self.cc:
-            payload["cc"] = self.cc
+        # Deduped, order kept; an address already in `to` is not repeated as CC.
+        cc = [a for a in dict.fromkeys([*self.cc, *(extra_cc or [])]) if a not in self.recipients]
+        if cc:
+            payload["cc"] = cc
         return payload
 
 

@@ -7,7 +7,13 @@ from agent_customer_support.channels.deps import (
     get_usage_store,
     require_admin,
 )
-from agent_customer_support.models import CustomerId, CustomerProfile, Role
+from agent_customer_support.models import (
+    CustomerId,
+    CustomerProfile,
+    ManagerEmail,
+    MantisUserName,
+    Role,
+)
 from agent_customer_support.stores.customer_registry import CustomerExistsError, CustomerRegistry
 from agent_customer_support.stores.usage_store import UsageStore
 
@@ -30,6 +36,8 @@ class CustomerOut(BaseModel):
     has_password: bool
     daily_question_limit: int | None = None
     questions_used_today: int = 0
+    manager_email: str | None = None
+    mantis_handler_name: str | None = None
 
     @classmethod
     def of(cls, p: CustomerProfile, used_today: int = 0) -> "CustomerOut":
@@ -42,6 +50,8 @@ class CustomerOut(BaseModel):
             has_password=p.password_hash is not None,
             daily_question_limit=p.daily_question_limit,
             questions_used_today=used_today,
+            manager_email=p.manager_email,
+            mantis_handler_name=p.mantis_handler_name,
         )
 
 
@@ -53,6 +63,8 @@ class CustomerCreate(BaseModel):
     enabled_applications: list[str] = Field(default_factory=list)
     config_notes: str | None = None
     daily_question_limit: int | None = Field(default=None, ge=0)  # None = unlimited
+    manager_email: ManagerEmail = None
+    mantis_handler_name: MantisUserName = None
 
 
 class CustomerPatch(BaseModel):
@@ -64,6 +76,9 @@ class CustomerPatch(BaseModel):
     # None is ambiguous here ("unchanged" vs "unlimited"), so the handler checks
     # model_fields_set: an explicit null clears the limit, an absent field keeps it.
     daily_question_limit: int | None = Field(default=None, ge=0)
+    # Same null rule as daily_question_limit: an explicit null clears the manager.
+    manager_email: ManagerEmail = None
+    mantis_handler_name: MantisUserName = None
 
 
 async def _used_today(usage: UsageStore, p: CustomerProfile) -> int:
@@ -92,6 +107,8 @@ async def create_customer(
         enabled_applications=body.enabled_applications,
         config_notes=body.config_notes,
         daily_question_limit=body.daily_question_limit,
+        manager_email=body.manager_email,
+        mantis_handler_name=body.mantis_handler_name,
         password_hash=hash_password(body.password),
     )
     try:
@@ -123,6 +140,10 @@ async def update_customer(
         profile.config_notes = patch.config_notes
     if "daily_question_limit" in patch.model_fields_set:
         profile.daily_question_limit = patch.daily_question_limit
+    if "manager_email" in patch.model_fields_set:
+        profile.manager_email = patch.manager_email
+    if "mantis_handler_name" in patch.model_fields_set:
+        profile.mantis_handler_name = patch.mantis_handler_name
     # An absent password leaves the existing hash alone; only an explicit one re-hashes,
     # so a rename can't wipe someone's credentials.
     if patch.password is not None:

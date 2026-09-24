@@ -8,8 +8,8 @@
 The output guardrail (`GuardrailAgent.check_output`) flags a reply when a claim in it
 is not supported by the passages the reply cited. KnowledgeAgent sometimes adds a few
 words that are not in the source -- a harmless tip, a bit of context -- and a flag used
-to throw the whole answer away. The coordinator now repairs a reply whose claims are all
-minor (a Python delete, then one LLM repair) before escalating; the `repair_path` column
+to throw the whole answer away. The coordinator now repairs any reply whose judge named
+at least one claim (a Python delete, then one LLM repair) before escalating; the `repair_path` column
 here says which rung each verdict would reach, with no extra LLM call. Nothing measured
 any of this until now: the answer harness (`eval/run_eval.py`) never runs the guardrail,
 and the triage harness never runs KnowledgeAgent.
@@ -50,7 +50,7 @@ from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
-from agent_customer_support.agents.guardrail import GuardrailAgent, only_minor, apply_claims
+from agent_customer_support.agents.guardrail import GuardrailAgent, apply_claims
 from agent_customer_support.agents.knowledge import KnowledgeAgent
 from agent_customer_support.agents.prompts import PROCESS_BLOCK
 from agent_customer_support.config import get_settings
@@ -210,8 +210,8 @@ def repair_path(verdict: dict, answer: str) -> str:
 
       ""        the guardrail passed; nothing to repair
       python    every claim is minor and `apply_claims` deletes them safely
-      llm       every claim is minor but Python refused -- the repair call would run
-      escalate  a critical claim, or no named claim at all
+      llm       a major claim, or Python refused -- the repair call would run
+      escalate  no named claim at all, so there is nothing to repair
 
     `llm` is an upper bound: the real path judges the repaired reply once more and may
     still escalate. That second outcome needs a paid call, so it is not simulated here.
@@ -219,7 +219,7 @@ def repair_path(verdict: dict, answer: str) -> str:
     if verdict.get("pass", True):
         return ""
     claims = verdict.get("unsupported_claims") or []
-    if not only_minor(claims):
+    if not claims:
         return "escalate"
     return "python" if apply_claims(answer, claims) is not None else "llm"
 

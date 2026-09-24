@@ -88,34 +88,39 @@ class MantisClient:
         application: str | None,
         transcript: str,
         files: list[MantisFile],
+        handler_name: str | None = None,
     ) -> MantisIssue | None:
         if not self.enabled:
             logger.warning(
                 "MantisBT not configured; bug ticket skipped for %s: %s", customer_id, report.title
             )
             return None
-        with tracing.span(
-            "tool.mantis.create_issue",
-            as_type="tool",
-            input={"title": report.title, "application": application, "files": len(files)},
-        ) as sp:
+        args = (report, customer_id, customer_name or customer_id, application, transcript)
+        try:
             try:
-                issue = await self._create(
-                    report, customer_id, customer_name or customer_id, application, transcript
+                issue = await self._create(*args, handler_name=handler_name)
+            except httpx.HTTPStatusError as exc:
+                # MantisBT rejects the whole issue when the handler does not exist or
+                # cannot see the project. A wrong assignee in the admin form must cost
+                # the assignment, not the ticket: file it once more, unassigned.
+                if handler_name is None or not exc.response.is_client_error:
+                    raise
+                logger.warning(
+                    "MantisBT rejected handler %s for %s (%s); filing unassigned",
+                    handler_name,
+                    customer_id,
+                    exc.response.status_code,
                 )
-            except Exception as exc:  # noqa: BLE001 - degrade, never break the turn
-                logger.warning("MantisBT issue creation failed for %s: %s", customer_id, exc)
-                sp.update(output={"error": str(exc)})
-                return None
-            attached = 0
-            if files:
-                try:
-                    await self._attach(issue.id, files)
-                    attached = len(files)
-                except Exception as exc:  # noqa: BLE001 - the ticket exists; only the files are lost
-                    logger.warning("MantisBT file upload failed for issue %s: %s", issue.id, exc)
-            sp.update(output={"issue_id": issue.id, "url": issue.url, "files_attached": attached})
-            return issue
+                issue = await self._create(*args, handler_name=None)
+        except Exception as exc:  # noqa: BLE001 - degrade, never break the turn
+            logger.warning("MantisBT issue creation failed for %s: %s", customer_id, exc)
+            return None
+        if files:
+            try:
+                await self._attach(issue.id, files)
+            except Exception as exc:  # noqa: BLE001 - the ticket exists; only the files are lost
+                logger.warning("MantisBT file upload failed for issue %s: %s", issue.id, exc)
+        return issue
 
     async def add_note(self, issue_id: int, text: str) -> bool:
         """Append a note to an existing issue -- how the user's contact details reach a
@@ -151,6 +156,8 @@ class MantisClient:
         customer_name: str,
         application: str | None,
         transcript: str,
+        *,
+        handler_name: str | None,
     ) -> MantisIssue:
         header = "\n".join(
             [
@@ -169,6 +176,8 @@ class MantisClient:
             "project": {"name": self.project},
             "category": {"name": self.category},
         }
+        if handler_name is not None:
+            body["handler"] = {"name": handler_name}
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             resp = await client.post(
                 f"{self.base_url}/api/rest/issues", json=body, headers=self._headers()
