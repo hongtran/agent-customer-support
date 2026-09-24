@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Customer,
@@ -109,6 +109,10 @@ export default function CustomerAdmin() {
   const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [newPassword, setNewPassword] = useState("");
+  // The reset field is locked until the pencil is clicked, so editing another field
+  // (or a browser autofill) cannot change a customer's password by accident.
+  const [editingPassword, setEditingPassword] = useState(false);
+  const passwordRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -145,6 +149,7 @@ export default function CustomerAdmin() {
   function selectItem(c: Customer) {
     setCreating(false);
     setNewPassword("");
+    setEditingPassword(false);
     setSel(c);
   }
 
@@ -175,7 +180,9 @@ export default function CustomerAdmin() {
 
   async function onSave() {
     if (!sel || busy) return;
-    if (newPassword && newPassword.length < 8) {
+    // A password is only sent while the field is unlocked; a locked field sends nothing.
+    const password = editingPassword ? newPassword : "";
+    if (password && password.length < 8) {
       setError("Mật khẩu phải có ít nhất 8 ký tự");
       return;
     }
@@ -193,9 +200,10 @@ export default function CustomerAdmin() {
         mantis_handler_name: sel.mantis_handler_name,
         // Only send a password when one was typed — an empty field must leave the
         // existing credentials alone, not wipe them.
-        ...(newPassword ? { password: newPassword } : {}),
+        ...(password ? { password } : {}),
       });
       setNewPassword("");
+      setEditingPassword(false);
       setSel(null);
       await refresh();
     } catch (e) {
@@ -461,13 +469,53 @@ export default function CustomerAdmin() {
 
               <div>
                 <label className={labelCls}>Đặt lại mật khẩu</label>
-                <input
-                  type="password"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="Để trống nếu không đổi"
-                  className={inputCls}
-                />
+                <div className="relative">
+                  <input
+                    ref={passwordRef}
+                    type="password"
+                    // Stops the browser from filling in the admin's own saved password.
+                    autoComplete="new-password"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    disabled={!editingPassword || busy}
+                    placeholder={
+                      editingPassword ? "Nhập mật khẩu mới (ít nhất 8 ký tự)" : "Bấm ✎ để đổi mật khẩu"
+                    }
+                    className={`${inputCls} pr-10 disabled:cursor-not-allowed disabled:bg-gray-50`}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (editingPassword) {
+                        // Cancel: lock again and drop whatever was typed.
+                        setNewPassword("");
+                        setEditingPassword(false);
+                      } else {
+                        setEditingPassword(true);
+                        // Focus after React has re-enabled the input.
+                        setTimeout(() => passwordRef.current?.focus(), 0);
+                      }
+                    }}
+                    disabled={busy}
+                    title={editingPassword ? "Hủy đổi mật khẩu" : "Đổi mật khẩu"}
+                    aria-label={editingPassword ? "Hủy đổi mật khẩu" : "Đổi mật khẩu"}
+                    className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-gray-400 hover:text-blue-600 disabled:opacity-40"
+                  >
+                    {editingPassword ? (
+                      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth={1.8} className="h-4 w-4">
+                        <path d="M5 5l10 10M15 5L5 15" strokeLinecap="round" />
+                      </svg>
+                    ) : (
+                      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth={1.8} className="h-4 w-4">
+                        <path
+                          d="M13.5 3.5l3 3L7 16H4v-3l9.5-9.5z"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    )}
+                  </button>
+                </div>
               </div>
 
               <div className="flex items-center gap-2 pt-2">
