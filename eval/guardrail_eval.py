@@ -234,7 +234,7 @@ _NO_REPAIR = {
 
 
 async def repair_outcome(
-    verdict: dict, answer: str, source_passages: list[str]
+    verdict: dict, answer: str, source_passages: list[str], question: str = ""
 ) -> tuple[dict, TurnCost]:
     """Run the rung `repair_path` names and judge what it produced.
 
@@ -265,7 +265,9 @@ async def repair_outcome(
         else:
             repaired = None
         if repaired is not None:
-            recheck = await GuardrailAgent().check_output(repaired, source_passages)
+            recheck = await GuardrailAgent().check_output(
+                repaired, source_passages, question=question
+            )
             cols["repaired_answer"] = repaired
             cols["repaired_guardrail_pass"] = bool(recheck.get("pass", True))
             cols["repaired_unsupported_claims"] = format_claims(
@@ -326,15 +328,19 @@ async def _one(test: TestQuestion, scope: bool) -> dict:
     """KnowledgeAgent -> guardrail -> judge, for one question, on this worker's loop."""
     run = await answer_question(test, _rag(), scope)
 
-    # The same call, with the same two arguments, that `Coordinator.handle_turn` makes.
+    # The same call, with the same arguments, that `Coordinator.handle_turn` makes.
     # Always made -- the no-passages short-circuit is part of the behaviour under test.
     started = time.perf_counter()
     with usage.collect() as gu:
-        verdict = await GuardrailAgent().check_output(run.answer, run.source_passages)
+        verdict = await GuardrailAgent().check_output(
+            run.answer, run.source_passages, question=test.question
+        )
     guard_cost = _turn_cost(gu, started)
 
     # What the coordinator's repair ladder would do next, and how the result judges.
-    repair_cols, repair_cost = await repair_outcome(verdict, run.answer, run.source_passages)
+    repair_cols, repair_cost = await repair_outcome(
+        verdict, run.answer, run.source_passages, test.question
+    )
 
     # Only an answer can be grounded or not. Clarify / no-answer replies are canned text
     # and a suspected-bug reply is a diagnosis, not an answer; they are counted, not rated.

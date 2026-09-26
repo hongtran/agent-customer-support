@@ -25,6 +25,13 @@ def _sources_block(passages: list[str]) -> str:
     return "\n\n".join(f"[{i}] {p}" for i, p in enumerate(passages))
 
 
+def _question_block(question: str) -> str:
+    """The customer's question, ahead of the sources, in the order the prompt lists them.
+    Empty when there is none (an eval row, a test), so no dangling header reaches the judge."""
+    question = (question or "").strip()
+    return f"CÂU HỎI CỦA KHÁCH HÀNG:\n{question}\n\n" if question else ""
+
+
 def only_minor(claims: list[dict]) -> bool:
     """True when there is at least one claim and none is major.
 
@@ -125,8 +132,17 @@ class GuardrailAgent:
             return {"pass": False, "reason": "oversized_input"}
         return {"pass": True, "reason": ""}
 
-    async def check_output(self, reply: str, source_passages: list[str] | None = None) -> dict:
+    async def check_output(
+        self, reply: str, source_passages: list[str] | None = None, question: str = ""
+    ) -> dict:
         """Judge whether every claim in `reply` is supported by this turn's sources.
+
+        `question` is the customer's message for this turn. The guides are written for
+        every lab, so they never hold the customer's own facts (how many rooms, which
+        volumes, how they work today); without the question the judge flags a reply that
+        applies a generic step to those facts as invented. It is context, not a source
+        of product claims -- the prompt still makes a feature the customer only asked
+        about a major claim.
 
         `source_passages` is every passage the knowledge turn retrieved (guides and Q&A),
         not only the ones the answer cited: a composer that cites the wrong chunk, or
@@ -157,7 +173,7 @@ class GuardrailAgent:
                 {
                     "role": "user",
                     "content": (
-                        f"NGUỒN:\n{_sources_block(source_passages)}"
+                        _question_block(question) + f"NGUỒN:\n{_sources_block(source_passages)}"
                         f"\n\nCÂU TRẢ LỜI CẦN KIỂM TRA:\n{reply}"
                     ),
                 }
