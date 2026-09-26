@@ -184,7 +184,9 @@ class Coordinator:
             # `source_passages` is empty for every other route (flow,
             # escalation, out_of_scope) and for knowledge replies that cited nothing, so
             # check_output short-circuits there without an LLM call.
-            gout = await self.guardrail.check_output(result.reply, result.source_passages)
+            gout = await self.guardrail.check_output(
+                result.reply, result.source_passages, question=ctx.message
+            )
             repaired: str | None = None
             if not gout["pass"]:
                 result, repaired = await self._repair_or_escalate(ctx, result, gout)
@@ -233,7 +235,9 @@ class Coordinator:
                 fixed = await self.knowledge.repair(result.reply, claims, result.source_passages)
                 sp.update(output={"repaired": fixed})
             if fixed:
-                recheck = await self.guardrail.check_output(fixed, result.source_passages)
+                recheck = await self.guardrail.check_output(
+                    fixed, result.source_passages, question=ctx.message
+                )
                 if recheck["pass"]:
                     logger.info("ungrounded reply repaired by llm: %s", gout.get("reason"))
                     result.reply = fixed

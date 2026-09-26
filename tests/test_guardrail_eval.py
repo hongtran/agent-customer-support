@@ -264,7 +264,7 @@ async def test_python_path_writes_the_stripped_answer_and_judges_it(monkeypatch)
     assert cols["repaired_guardrail_pass"] is True
     assert cols["final_escalated"] is False
     knowledge.repair.assert_not_awaited()
-    guardrail.check_output.assert_awaited_once_with(cols["repaired_answer"], ["p"])
+    guardrail.check_output.assert_awaited_once_with(cols["repaired_answer"], ["p"], question="")
 
 
 async def test_python_path_ships_even_when_the_harness_re_judge_still_flags_it(monkeypatch):
@@ -287,7 +287,7 @@ async def test_llm_path_calls_repair_and_follows_the_recheck(monkeypatch):
     assert cols["repaired_guardrail_pass"] is True
     assert cols["final_escalated"] is False
     knowledge.repair.assert_awaited_once_with(_ANSWER, claims, ["p"])
-    guardrail.check_output.assert_awaited_once_with("Anh/Chị nhấn Tạo mới.", ["p"])
+    guardrail.check_output.assert_awaited_once_with("Anh/Chị nhấn Tạo mới.", ["p"], question="")
 
 
 async def test_llm_path_that_fails_the_recheck_is_a_final_escalation(monkeypatch):

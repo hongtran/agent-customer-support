@@ -327,6 +327,11 @@ async def test_a_span_python_cannot_delete_goes_to_the_llm_repair_and_is_judged_
         "Anh/Chị vào menu Phiếu yêu cầu rồi nhấn Tạo mới.",
         ["Vào menu Phiếu yêu cầu."],
     )
+    # Both judge calls see the customer's question, the first and the recheck alike.
+    assert [call.kwargs["question"] for call in c.guardrail.check_output.await_args_list] == [
+        "q",
+        "q",
+    ]
     c.escalation.run.assert_not_awaited()
 
 

@@ -74,6 +74,31 @@ async def test_grounded_reply_passes():
     assert res["pass"] is True
 
 
+async def test_the_judge_sees_the_customer_question_before_the_sources():
+    """The guides never hold the customer's own facts (3 volumes, 2 rooms), so a reply
+    that applies a generic step to them is only judgeable with the question in view."""
+    g = GuardrailAgent()
+    with patch(
+        "agent_customer_support.agents.guardrail.complete_structured",
+        return_value=GroundingVerdict(grounded=True, unsupported_claims=[]),
+    ) as llm:
+        await g.check_output(
+            "Khai báo 3 thể tích là 3 tham số.", _SOURCES, question="Có 3 thể tích"
+        )
+    content = llm.call_args.kwargs["messages"][0]["content"]
+    assert content.startswith("CÂU HỎI CỦA KHÁCH HÀNG:\nCó 3 thể tích\n\nNGUỒN:")
+
+
+async def test_no_question_adds_no_header():
+    g = GuardrailAgent()
+    with patch(
+        "agent_customer_support.agents.guardrail.complete_structured",
+        return_value=GroundingVerdict(grounded=True, unsupported_claims=[]),
+    ) as llm:
+        await g.check_output("Vào Phiếu yêu cầu.", _SOURCES)
+    assert llm.call_args.kwargs["messages"][0]["content"].startswith("NGUỒN:")
+
+
 async def test_no_source_passages_skips_the_judge():
     """Nothing to judge against, so no call at all.
 

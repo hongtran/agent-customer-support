@@ -337,55 +337,63 @@ OUT_OF_SCOPE_REPLY = (
 
 
 GROUNDING_JUDGE_PROMPT = """Bạn kiểm tra CĂN CỨ của một câu trả lời trợ lý CenLab.
-Bạn nhận: (1) QUY TRÌNH ở đầu system, (2) các NGUỒN mà câu trả lời đã dẫn, (3) CÂU TRẢ LỜI.
+Bạn nhận: (1) QUY TRÌNH ở đầu system, (2) CÂU HỎI của khách hàng, (3) các NGUỒN mà câu trả lời
+đã dẫn, (4) CÂU TRẢ LỜI.
 
 MỤC TIÊU: chỉ chặn lỗi có thể làm người dùng THAO TÁC SAI hoặc HIỂU SAI phần mềm.
 Không bắt lỗi từng chữ.
 
-Nhiệm vụ DUY NHẤT: tìm các khẳng định KHÔNG được QUY TRÌNH hoặc NGUỒN hỗ trợ và phân loại mức độ.
-Đánh giá theo Ý, không theo TỪ: một câu có căn cứ nếu ý chính suy ra được từ nguồn, dù có thêm
-từ nối, từ bổ nghĩa chung chung, hoặc diễn đạt khác.
+BA NGUỒN CĂN CỨ HỢP LỆ (ngang nhau):
+a) QUY TRÌNH ở đầu system;
+b) các NGUỒN đã dẫn;
+c) NGỮ CẢNH CÂU HỎI — dữ kiện do chính khách hàng nêu (số lượng phòng/mẫu/tham số, tên đơn vị,
+   cách họ đang làm, hiện trạng hệ thống của họ). Tài liệu viết chung cho mọi phòng thí nghiệm
+   nên KHÔNG BAO GIỜ chứa các dữ kiện riêng này. Câu trả lời nhắc lại hoặc áp dụng dữ kiện của
+   khách hàng vào hướng dẫn chung là CÓ CĂN CỨ.
+   Ví dụ: khách nói có 3 thể tích → "khai báo 3 thể tích là 3 tham số" là có căn cứ, vì cách
+   khai báo tham số lấy từ nguồn, còn số 3 lấy từ câu hỏi.
+   Ngoại lệ: nếu câu trả lời KHẲNG ĐỊNH phần mềm CÓ một tính năng/hành vi mà khách chỉ đang
+   HỎI hoặc ĐỀ XUẤT, thì đó vẫn là major.
 
-severity="major" — khẳng định cụ thể người dùng sẽ làm theo nhưng KHÔNG có trong nguồn:
+ĐỌC TRỌN CÂU, KHÔNG CẮT MỆNH ĐỀ:
+Phải xét ý của cả câu trước khi kết luận. TUYỆT ĐỐI không lấy một mệnh đề nằm trong câu phủ định
+rồi coi đó là khẳng định.
+Các câu sau LUÔN có căn cứ, không liệt kê:
+- "tài liệu chưa đề cập / nguồn không nêu / chưa có hướng dẫn về X";
+- "hệ thống chưa hỗ trợ X theo tài liệu hiện có";
+- câu ghi nhận nhu cầu, đề xuất tính năng, hoặc chuyển tiếp cho quản trị/bộ phận phát triển.
+Đây là hành vi đúng: thừa nhận giới hạn của tài liệu.
+
+PHÂN LOẠI MỨC ĐỘ (chỉ cho khẳng định thực sự thiếu căn cứ):
+severity="major" — khẳng định cụ thể người dùng sẽ làm theo nhưng không có trong ba nguồn trên:
 - tên menu, tab, nút, màn hình, trường dữ liệu, trạng thái không có trong nguồn;
 - bước thao tác mới, hoặc sai thứ tự so với nguồn;
 - điều kiện, giới hạn, phân quyền, giá trị, số liệu, công thức không có trong nguồn;
 - mô tả hành vi/kết quả của hệ thống trái với nguồn hoặc không có trong nguồn;
-- khẳng định một tính năng có/không có mà nguồn không nói.
-
-severity="minor" — từ/cụm từ thêm vào nhưng KHÔNG đổi thao tác và KHÔNG thêm dữ kiện mới, ví dụ:
-- từ bổ nghĩa chung: "đã được cấu hình", "theo quy trình", "trên hệ thống", "tương ứng",
-  "phù hợp", "nếu cần";
+- khẳng định phần mềm CÓ hoặc KHÔNG CÓ một tính năng mà nguồn không nói.
+severity="minor" — từ/cụm từ thêm vào nhưng không đổi thao tác và không thêm dữ kiện mới:
+- từ bổ nghĩa chung: "đã được cấu hình", "theo quy trình", "trên hệ thống", "tương ứng";
 - câu tóm tắt, câu nối, câu gộp các bước đã có trong nguồn;
-- tổng quát hóa nhẹ từ nội dung nguồn.
+- tổng quát hóa nhẹ, hoặc áp dụng hướng dẫn chung vào số liệu khách đưa ra.
 
 Khi phân vân: "Nếu xóa cụm này, người dùng có thao tác khác đi không?"
 Không → minor. Có → major.
 
 KẾT LUẬN:
 - grounded=false CHỈ KHI có ít nhất một khẳng định severity="major".
-- Chỉ có minor hoặc không có gì → grounded=true (vẫn liệt kê minor trong unsupported_claims).
+- Chỉ có minor hoặc không có gì → grounded=true (vẫn liệt kê minor).
 
 Với mỗi khẳng định liệt kê: span chép NGUYÊN VĂN từ câu trả lời, vừa đủ để replacement thành câu
 đúng ngữ pháp; replacement là span sau khi bỏ ý thiếu căn cứ — CHỈ dùng lại các từ có trong span
 theo đúng thứ tự (được bỏ từ, sửa dấu câu/viết hoa), TUYỆT ĐỐI không thêm từ mới; rỗng nếu xóa hẳn.
 
-Ví dụ:
-- Trả lời: "thực hiện theo loại nhập kết quả đã được cấu hình"; nguồn chỉ nêu hai cách nhập kết quả.
-  → "đã được cấu hình" là minor (không đổi thao tác). grounded=true.
-- Trả lời: "bấm nút Duyệt nhanh ở góc phải"; nguồn không có nút này → major. grounded=false.
-- Trả lời: "LOD phải nhỏ hơn 0.5"; nguồn không nêu giá trị này → major. grounded=false.
-- Trả lời: "theo dõi Mã ký số/trạng thái và kiểm tra thông báo hệ thống trước khi xử lý tiếp";
-  nguồn không nói kiểm tra thông báo → major (thêm một bước thao tác);
-  replacement "theo dõi Mã ký số/trạng thái trước khi xử lý tiếp".
-
 KHÔNG đánh giá: văn phong, độ dài, mức độ lịch sự, có đúng phạm vi CenLab hay không, có nên hỏi
 lại hay không. Những việc đó thuộc khâu khác.
 KHÔNG coi là thiếu căn cứ (không liệt kê):
-- token hình ảnh [[img:screen:...]] / [[img:icon:...]] — đây là ảnh thật từ tài liệu, hệ thống tự render;
+- token hình ảnh [[img:screen:...]] / [[img:icon:...]] — ảnh thật từ tài liệu, hệ thống tự render;
 - câu hướng dẫn liên hệ quản trị hệ thống/admin (phân quyền, master data, cấu hình giao diện,
-  mất dữ liệu, thêm/bớt tính năng) — đây là chính sách định tuyến cố định của hệ thống;
-- lời chào, câu dẫn, câu hỏi lại, câu nêu rõ giả định/điều kiện, ví dụ, giải thích, diễn giải,
+  mất dữ liệu, thêm/bớt tính năng) — chính sách định tuyến cố định của hệ thống;
+- lời chào, câu dẫn, câu hỏi lại, câu nêu giả định/điều kiện, ví dụ, giải thích, diễn giải,
   kí hiệu suy luận như: ->
 """
 
