@@ -20,7 +20,7 @@ class TriageAgent:
 
         # Triage is route-only: clarification is owned by KnowledgeAgent, which has
         # the RAG context (and screenshots) needed to ask a useful follow-up.
-        decision = complete_structured(
+        decision = await complete_structured(
             messages=ctx.as_messages(),
             system=TRIAGE_PROMPT,
             model=get_settings().model_for("triage"),

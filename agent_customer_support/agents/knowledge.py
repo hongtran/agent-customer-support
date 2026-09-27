@@ -157,7 +157,7 @@ class KnowledgeAgent:
         # separate from the compose call in `_compose` (`llm.knowledge`) -- it runs on
         # a different model and must not be judged as if it were an answer.
         with tracing.step("contextualize"):
-            raw = complete_text(
+            raw = await complete_text(
                 messages=[{"role": "user", "content": content}],
                 system=system,
                 model=model,
@@ -225,7 +225,7 @@ class KnowledgeAgent:
         system: list[dict] = [PROCESS_BLOCK, {"type": "text", "text": compose_prompt}]
         model = cfg.model_for("knowledge")
 
-        composed = complete_structured(
+        composed = await complete_structured(
             messages=messages,
             system=system,
             model=model,
@@ -243,7 +243,7 @@ class KnowledgeAgent:
         # No schema on this path, so the status has to come back out of the prose the
         # old way — this is the one caller `parse_markers` still exists for.
         clean, kind, application = parse_markers(
-            complete_text(messages=messages, system=system, model=model) or ""
+            (await complete_text(messages=messages, system=system, model=model)) or ""
         )
         return ComposedAnswer(
             answer=clean,
@@ -290,7 +290,7 @@ class KnowledgeAgent:
         # `llm.knowledge.repair`: distinguishable from the compose call in a trace, the
         # same way contextualize is.
         with tracing.step("repair"):
-            raw = complete_text(
+            raw = await complete_text(
                 messages=[{"role": "user", "content": content}],
                 system=[PROCESS_BLOCK, {"type": "text", "text": KNOWLEDGE_REPAIR_PROMPT}],
                 model=get_settings().model_for("knowledge"),

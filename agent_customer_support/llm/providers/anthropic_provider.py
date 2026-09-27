@@ -1,7 +1,7 @@
 from pydantic import BaseModel
 
 
-def anthropic_complete_with_tools(
+async def anthropic_complete_with_tools(
     *,
     client,
     model: str,
@@ -26,10 +26,10 @@ def anthropic_complete_with_tools(
         # model instance. ParsedMessage subclasses Message, so the block/usage
         # extraction below is unchanged; `parsed_output` is None when the model
         # produced no valid instance.
-        resp = client.messages.parse(**kwargs, output_format=schema)
+        resp = await client.messages.parse(**kwargs, output_format=schema)
         parsed = resp.parsed_output
     else:
-        resp = client.messages.create(**kwargs)
+        resp = await client.messages.create(**kwargs)
         parsed = None
 
     text_parts: list[str] = []

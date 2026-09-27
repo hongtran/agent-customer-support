@@ -129,7 +129,7 @@ class IssueVerificationAgent:
                         evidence=verify.model_dump(),
                     )
         logger.warning(verify.model_dump_json(indent=2, ensure_ascii=False))
-        decision = complete_structured(
+        decision = await complete_structured(
             messages=messages
             + [{"role": "user", "content": _note_content(verify, ctx, to_content)}],
             schema=VerificationDecision,
@@ -154,7 +154,7 @@ class IssueVerificationAgent:
             # One structured call over the same conversation turns it into the ticket
             # text. Labelled so it lands as `llm.issue_verification.report` in the trace.
             with tracing.step("report"):
-                report = complete_structured(
+                report = await complete_structured(
                     messages=messages,
                     schema=BugReport,
                     system=BUG_REPORT_PROMPT,
@@ -294,7 +294,7 @@ async def _doc_check(
     passages = await _search_guides(ctx, verify)
     note = _DOC_CHECK_NOTE.format(passages=passages_block(passages, with_sections=True) or "(rỗng)")
     with tracing.step("doc_check"):
-        check = complete_structured(
+        check = await complete_structured(
             messages=messages + [{"role": "user", "content": note}],
             schema=DocCheck,
             system=[PROCESS_BLOCK, {"type": "text", "text": ISSUE_DOC_CHECK_PROMPT}],

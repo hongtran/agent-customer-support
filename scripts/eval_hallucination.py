@@ -188,7 +188,7 @@ Nhãn hợp lệ:
 Trả về JSON duy nhất: {"verdict": "<nhãn>", "reason": "<1-2 câu giải thích ngắn>"}
 """
 
-def judge(question: str, agent_reply: str, kb_passages: list[str]) -> dict:
+async def judge(question: str, agent_reply: str, kb_passages: list[str]) -> dict:
     passages_text = "\n---\n".join(kb_passages) if kb_passages else "(không có kết quả)"
     user_msg = f"""Câu hỏi: {question}
 
@@ -199,7 +199,7 @@ KB Passages (nội dung tài liệu thực tế từ RAG):
 {passages_text}
 
 Phân loại câu trả lời Agent theo nhãn đã định nghĩa."""
-    out = complete_with_tools(
+    out = await complete_with_tools(
         messages=[{"role": "user", "content": user_msg}],
         tools=[],
         system=JUDGE_SYSTEM,
@@ -287,7 +287,7 @@ async def run_eval() -> None:
 
         # 3. Judge
         t1 = time.monotonic()
-        verdict_obj = judge(case.question, agent_reply, kb_passages)
+        verdict_obj = await judge(case.question, agent_reply, kb_passages)
         elapsed_judge = time.monotonic() - t1
 
         verdict  = verdict_obj.get("verdict", "PARSE_ERROR")

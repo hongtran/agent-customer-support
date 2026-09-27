@@ -506,7 +506,7 @@ def test_load_scored_raises_on_a_mislabelled_row(tmp_path):
 # --- judge call ---------------------------------------------------------------------
 
 
-def test_judge_sends_the_process_block_like_the_guardrail_does(monkeypatch):
+async def test_judge_sends_the_process_block_like_the_guardrail_does(monkeypatch):
     """The agent answers from PROCESS_BLOCK as well as the cited passages, so the judge
     must see it too -- otherwise every process-derived sentence is labelled "minor"."""
     from agent_customer_support.agents.prompts import PROCESS_BLOCK
@@ -515,7 +515,7 @@ def test_judge_sends_the_process_block_like_the_guardrail_does(monkeypatch):
 
     cap: dict = {}
 
-    def fake_complete_text(messages, system=None, model=None):
+    async def fake_complete_text(messages, system=None, model=None):
         cap["system"] = system
         cap["content"] = messages[0]["content"]
         return '{"label": "grounded", "reason": "", "extra_claims": []}'
@@ -526,7 +526,7 @@ def test_judge_sends_the_process_block_like_the_guardrail_does(monkeypatch):
     )
     run = AnswerRun(answer="a", outcome="answered", abstained=False, source_passages=["p0"])
 
-    judged, _cost = ge._judge_label(test, run)
+    judged, _cost = await ge._judge_label(test, run)
 
     assert judged["label"] == "grounded"
     assert cap["system"][0] is PROCESS_BLOCK

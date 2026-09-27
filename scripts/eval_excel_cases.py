@@ -90,7 +90,7 @@ Chỉ dựa vào đáp án chuẩn, KHÔNG dùng kiến thức bên ngoài.
 Trả về JSON DUY NHẤT: {"verdict":"<nhãn>","reason":"<1 câu tiếng Việt>"}"""
 
 
-def judge(case: dict, reply: str) -> dict:
+async def judge(case: dict, reply: str) -> dict:
     msg = f"""Câu hỏi: {case['question']}
 
 Câu trả lời của Agent:
@@ -100,7 +100,7 @@ Câu trả lời của Agent:
 {case['expected']}
 
 Chấm theo quy tắc."""
-    out = complete_with_tools(messages=[{"role":"user","content":msg}], tools=[], system=JUDGE_SYS, model="gpt-4o")
+    out = await complete_with_tools(messages=[{"role":"user","content":msg}], tools=[], system=JUDGE_SYS, model="gpt-4o")
     raw = (out.get("text") or "").strip()
     if "```" in raw:
         raw = raw.split("```")[1]
@@ -136,7 +136,7 @@ async def main():
         resp = await agent.handle_turn(customer_id="ttp", conversation_id=cid,
                                        message=case["question"], attachments=[])
         reply = resp.reply
-        v = judge(case, reply) if case["expected"] else {"verdict":"NO_REF","reason":"đáp án chuẩn để trống"}
+        v = await judge(case, reply) if case["expected"] else {"verdict":"NO_REF","reason":"đáp án chuẩn để trống"}
         verdict = v.get("verdict","?"); reason = v.get("reason","")
         results.append({**case, "verdict":verdict, "reply":reply,
                         "escalated":resp.escalated, "reason":reason})

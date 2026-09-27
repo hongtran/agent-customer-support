@@ -277,7 +277,7 @@ async def repair_outcome(
     return cols, _turn_cost(u, started)
 
 
-def _judge_label(test: TestQuestion, run: AnswerRun) -> tuple[dict, TurnCost]:
+async def _judge_label(test: TestQuestion, run: AnswerRun) -> tuple[dict, TurnCost]:
     """Label one answer (synchronous - the LLM facade is sync)."""
     content = f"""Question:
 {test.question}
@@ -294,7 +294,7 @@ GENERATED answer:
 Return the JSON object described in the instructions."""
     started = time.perf_counter()
     with usage.collect() as u:
-        text = complete_text(
+        text = await complete_text(
             messages=[{"role": "user", "content": content}],
             # Same prefix shape as `GuardrailAgent.check_output`: the process rules are a
             # source for the agent, so they must be one for the judge too.
@@ -345,7 +345,7 @@ async def _one(test: TestQuestion, scope: bool) -> dict:
     # Only an answer can be grounded or not. Clarify / no-answer replies are canned text
     # and a suspected-bug reply is a diagnosis, not an answer; they are counted, not rated.
     if run.outcome == "answered":
-        judged, judge_cost = await asyncio.to_thread(_judge_label, test, run)
+        judged, judge_cost = await _judge_label(test, run)
     else:
         judged, judge_cost = {"label": "", "reason": "", "extra_claims": []}, TurnCost()
 

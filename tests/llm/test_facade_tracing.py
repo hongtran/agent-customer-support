@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 from agent_customer_support.llm import complete_with_tools
 
 
-def test_facade_records_generation_with_usage():
+async def test_facade_records_generation_with_usage():
     handle = MagicMock()
 
     @contextmanager
@@ -23,7 +23,7 @@ def test_facade_records_generation_with_usage():
         patch("agent_customer_support.llm.openai_complete_with_tools", return_value=fake_out),
     ):
         gs.return_value.agent_model = "gpt-4o-mini"
-        out = complete_with_tools(
+        out = await complete_with_tools(
             messages=[{"role": "user", "content": "x"}], tools=[], system=None
         )
     assert out["text"] == "hi"
