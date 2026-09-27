@@ -168,7 +168,7 @@ class GuardrailAgent:
         if not source_passages:
             return {"pass": True, "reason": ""}
 
-        verdict = complete_structured(
+        verdict = await complete_structured(
             messages=[
                 {
                     "role": "user",

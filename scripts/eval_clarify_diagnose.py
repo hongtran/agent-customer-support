@@ -80,8 +80,8 @@ Nhãn:
 Trả về JSON: {"verdict":"<nhãn>","reason":"<1 câu>"}"""
 
 
-def judge(question: str, reply: str) -> dict:
-    out = complete_with_tools(
+async def judge(question: str, reply: str) -> dict:
+    out = await complete_with_tools(
         messages=[{"role": "user", "content": f"Hội thoại:\n{question}\n\nCâu trả lời cuối của Agent:\n{reply}"}],
         tools=[],
         system=JUDGE_SYSTEM,
@@ -122,7 +122,7 @@ async def run_eval() -> None:
             )
             reply = resp.reply
             joined += f"assistant: {reply}\n"
-        verdict = judge(joined, reply)
+        verdict = await judge(joined, reply)
         ok = verdict.get("verdict") == case.expected
         passed += ok
         print(f"[{'PASS' if ok else 'FAIL'}] {case.id}: want {case.expected}, "

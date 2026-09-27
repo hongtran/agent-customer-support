@@ -15,7 +15,7 @@ pytestmark = pytest.mark.asyncio
 def _capture(monkeypatch):
     cap = {}
 
-    def fake_compose(*, messages, system, model, schema):
+    async def fake_compose(*, messages, system, model, schema):
         cap["content"] = messages[0]["content"]
         cap["system_text"] = system[-1]["text"] if isinstance(system, list) else system
         return composed_answer(

@@ -46,10 +46,8 @@ def enabled() -> bool:
 # and `step`, read by `generation` so an LLM call can be attributed to its agent --
 # the LLM facade calls the model without ever learning who asked for it, and the
 # name only lives on the parent span, which the facade cannot see. A ContextVar
-# carries it without growing a parameter on every agent signature; agents call the
-# model synchronously inside their own async method, so it is simply in scope (and
-# an `asyncio.to_thread` offload would still read it, since to_thread copies the
-# context in -- only a *set* inside the thread would fail to escape).
+# carries it without growing a parameter on every agent signature; agents await the
+# model inside their own async method, in the same task, so it is simply in scope.
 _AGENT: contextvars.ContextVar[str | None] = contextvars.ContextVar("tracing_agent", default=None)
 _STEP: contextvars.ContextVar[str | None] = contextvars.ContextVar("tracing_step", default=None)
 

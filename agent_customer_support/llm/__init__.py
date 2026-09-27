@@ -1,4 +1,7 @@
-from functools import lru_cache
+import asyncio
+import functools
+import weakref
+from collections.abc import Callable
 from typing import TypeVar
 
 from pydantic import BaseModel
@@ -15,10 +18,39 @@ from agent_customer_support.observability import tracing
 
 _OPENROUTER_PREFIX = "openrouter/"
 
+ClientT = TypeVar("ClientT")
 
-@lru_cache
+
+def _per_loop(factory: Callable[[], ClientT]) -> Callable[[], ClientT]:
+    """Cache one client per running event loop, not one per process.
+
+    The async SDK clients hold an httpx connection pool bound to the loop that first
+    used it. A process-wide cache would hand that client to a later loop -- the
+    evals run `asyncio.run` per row -- and fail with "Event loop is closed". Keyed
+    weakly, so a finished loop's client is dropped with it. Outside a running loop
+    (a sync caller or test) nothing is cached.
+    """
+    cache: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, ClientT] = (
+        weakref.WeakKeyDictionary()
+    )
+
+    @functools.wraps(factory)
+    def get() -> ClientT:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return factory()
+        if loop not in cache:
+            cache[loop] = factory()
+        return cache[loop]
+
+    get.cache_clear = cache.clear  # type: ignore[attr-defined]
+    return get
+
+
+@_per_loop
 def _openrouter_client():
-    from openai import OpenAI
+    from openai import AsyncOpenAI
 
     cfg = get_settings()
     if not cfg.openrouter_api_key:
@@ -26,7 +58,7 @@ def _openrouter_client():
             "OPENROUTER_API_KEY is unset but a model is routed to OpenRouter "
             "(model name starts with 'openrouter/')"
         )
-    return OpenAI(base_url=cfg.openrouter_base_url, api_key=cfg.openrouter_api_key)
+    return AsyncOpenAI(base_url=cfg.openrouter_base_url, api_key=cfg.openrouter_api_key)
 
 
 def _is_openrouter(model: str) -> bool:
@@ -42,9 +74,9 @@ _MODAL_PREFIX = "modal/"
 _QWEN_REASONING_EFFORT = {"minimal": "low", "low": "low", "medium": "medium", "high": "xhigh"}
 
 
-@lru_cache
+@_per_loop
 def _modal_client():
-    from openai import OpenAI
+    from openai import AsyncOpenAI
 
     cfg = get_settings()
     if not (cfg.modal_llm_base_url and cfg.modal_llm_api_key):
@@ -52,25 +84,25 @@ def _modal_client():
             "MODAL_LLM_BASE_URL and MODAL_LLM_API_KEY must both be set when a model "
             "is routed to Modal (model name starts with 'modal/')"
         )
-    return OpenAI(base_url=cfg.modal_llm_base_url, api_key=cfg.modal_llm_api_key)
+    return AsyncOpenAI(base_url=cfg.modal_llm_base_url, api_key=cfg.modal_llm_api_key)
 
 
 def _is_modal(model: str) -> bool:
     return model.startswith(_MODAL_PREFIX)
 
 
-@lru_cache
+@_per_loop
 def _anthropic_client():
-    from anthropic import Anthropic
+    from anthropic import AsyncAnthropic
 
-    return Anthropic()  # reads ANTHROPIC_API_KEY from env
+    return AsyncAnthropic()  # reads ANTHROPIC_API_KEY from env
 
 
-@lru_cache
+@_per_loop
 def _openai_client():
-    from openai import OpenAI
+    from openai import AsyncOpenAI
 
-    return OpenAI()  # reads OPENAI_API_KEY from env
+    return AsyncOpenAI()  # reads OPENAI_API_KEY from env
 
 
 def _is_anthropic(model: str) -> bool:
@@ -80,7 +112,7 @@ def _is_anthropic(model: str) -> bool:
 SchemaT = TypeVar("SchemaT", bound=BaseModel)
 
 
-def complete_with_tools(
+async def complete_with_tools(
     *,
     messages: list[dict],
     tools: list[dict],
@@ -104,7 +136,7 @@ def complete_with_tools(
         metadata={"environment": cfg.environment, "reasoning_effort": cfg.reasoning_effort},
     ) as gen:
         if _is_openrouter(model):
-            out = openai_complete_with_tools(
+            out = await openai_complete_with_tools(
                 client=_openrouter_client(),
                 # OpenRouter wants the bare `<vendor>/<name>`; the prefix is ours.
                 model=model.removeprefix(_OPENROUTER_PREFIX),
@@ -122,7 +154,7 @@ def complete_with_tools(
                 extra_body={"provider": {"require_parameters": True}} if schema else None,
             )
         elif _is_modal(model):
-            out = openai_complete_with_tools(
+            out = await openai_complete_with_tools(
                 client=_modal_client(),
                 model=model.removeprefix(_MODAL_PREFIX),
                 messages=messages,
@@ -144,7 +176,7 @@ def complete_with_tools(
                 temperature=None,
             )
         elif _is_anthropic(model):
-            out = anthropic_complete_with_tools(
+            out = await anthropic_complete_with_tools(
                 client=_anthropic_client(),
                 model=model,
                 messages=messages,
@@ -153,7 +185,7 @@ def complete_with_tools(
                 schema=schema,
             )
         else:
-            out = openai_complete_with_tools(
+            out = await openai_complete_with_tools(
                 client=_openai_client(),
                 model=model,
                 messages=messages,
@@ -171,16 +203,16 @@ def complete_with_tools(
         return out
 
 
-def complete_text(
+async def complete_text(
     messages: list[dict],
     system: str | list[dict] | None = None,
     model: str | None = None,
 ) -> str:
-    out = complete_with_tools(messages=messages, tools=[], system=system, model=model)
+    out = await complete_with_tools(messages=messages, tools=[], system=system, model=model)
     return out.get("text") or ""
 
 
-def complete_structured(
+async def complete_structured(
     *,
     messages: list[dict],
     schema: type[SchemaT],
@@ -194,7 +226,7 @@ def complete_structured(
     decoding guarantees the *shape* of a decision, never that a decision was made
     and never that it is the right one.
     """
-    out = complete_with_tools(
+    out = await complete_with_tools(
         messages=messages, tools=[], system=system, model=model, schema=schema
     )
     return out.get("parsed")

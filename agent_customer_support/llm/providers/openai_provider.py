@@ -28,7 +28,7 @@ def to_openai_tools(tool_defs: list[dict]) -> list[dict]:
     ]
 
 
-def openai_complete_with_tools(
+async def openai_complete_with_tools(
     *,
     client,
     model: str,
@@ -71,9 +71,9 @@ def openai_complete_with_tools(
         # validation of the result. The SDK derives the strict JSON schema from the
         # model class itself, so we never hand-build one.
         kwargs["response_format"] = schema
-        resp = client.chat.completions.parse(**kwargs)
+        resp = await client.chat.completions.parse(**kwargs)
     else:
-        resp = client.chat.completions.create(**kwargs)
+        resp = await client.chat.completions.create(**kwargs)
     choice = resp.choices[0]
     msg = choice.message
 

@@ -118,7 +118,7 @@ async def test_knowledge_clarify_roundtrip_no_escalate_then_resolves():
         ]
     )
 
-    def fake_compose(*args, **kwargs):
+    async def fake_compose(*args, **kwargs):
         return composed_answer(next(compose_outputs))
 
     original_complete_structured = knowledge_mod.complete_structured

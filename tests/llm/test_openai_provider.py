@@ -1,6 +1,6 @@
 import json
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 from agent_customer_support.llm.schemas import TriageDecision
 from agent_customer_support.llm.providers.openai_provider import (
     openai_complete_with_tools,
@@ -19,15 +19,17 @@ def test_to_openai_tools_shape():
     ]
 
 
-def test_parses_text_response():
+async def test_parses_text_response():
     msg = SimpleNamespace(content="hello", tool_calls=None)
     resp = SimpleNamespace(
         choices=[SimpleNamespace(message=msg, finish_reason="stop")],
         usage=SimpleNamespace(prompt_tokens=9, completion_tokens=5),
     )
     client = MagicMock()
+    client.chat.completions.create = AsyncMock()
+    client.chat.completions.parse = AsyncMock()
     client.chat.completions.create.return_value = resp
-    out = openai_complete_with_tools(
+    out = await openai_complete_with_tools(
         client=client,
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": "hi"}],
@@ -39,7 +41,7 @@ def test_parses_text_response():
     assert out["tool_calls"] == []
 
 
-def test_parses_tool_calls():
+async def test_parses_tool_calls():
     tc = SimpleNamespace(
         id="t1",
         function=SimpleNamespace(name="search_knowledge", arguments=json.dumps({"query": "x"})),
@@ -50,8 +52,10 @@ def test_parses_tool_calls():
         usage=SimpleNamespace(prompt_tokens=9, completion_tokens=5),
     )
     client = MagicMock()
+    client.chat.completions.create = AsyncMock()
+    client.chat.completions.parse = AsyncMock()
     client.chat.completions.create.return_value = resp
-    out = openai_complete_with_tools(
+    out = await openai_complete_with_tools(
         client=client,
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": "hi"}],
@@ -62,15 +66,17 @@ def test_parses_tool_calls():
     assert out["tool_calls"] == [{"id": "t1", "name": "search_knowledge", "input": {"query": "x"}}]
 
 
-def test_surfaces_usage():
+async def test_surfaces_usage():
     msg = SimpleNamespace(content="hello", tool_calls=None)
     resp = SimpleNamespace(
         choices=[SimpleNamespace(message=msg, finish_reason="stop")],
         usage=SimpleNamespace(prompt_tokens=9, completion_tokens=5),
     )
     client = MagicMock()
+    client.chat.completions.create = AsyncMock()
+    client.chat.completions.parse = AsyncMock()
     client.chat.completions.create.return_value = resp
-    out = openai_complete_with_tools(
+    out = await openai_complete_with_tools(
         client=client,
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": "hi"}],
@@ -87,13 +93,15 @@ def _text_client():
         usage=SimpleNamespace(prompt_tokens=9, completion_tokens=5),
     )
     client = MagicMock()
+    client.chat.completions.create = AsyncMock()
+    client.chat.completions.parse = AsyncMock()
     client.chat.completions.create.return_value = resp
     return client
 
 
-def test_reasoning_model_gets_reasoning_params():
+async def test_reasoning_model_gets_reasoning_params():
     client = _text_client()
-    openai_complete_with_tools(
+    await openai_complete_with_tools(
         client=client,
         model="gpt-5.4-mini",
         messages=[{"role": "user", "content": "hi"}],
@@ -110,9 +118,9 @@ def test_reasoning_model_gets_reasoning_params():
     assert "max_tokens" not in kwargs
 
 
-def test_legacy_model_keeps_chat_params():
+async def test_legacy_model_keeps_chat_params():
     client = _text_client()
-    openai_complete_with_tools(
+    await openai_complete_with_tools(
         client=client,
         model="gpt-4o",
         messages=[{"role": "user", "content": "hi"}],
@@ -128,15 +136,17 @@ def test_legacy_model_keeps_chat_params():
     assert "max_completion_tokens" not in kwargs
 
 
-def test_usage_none_safe():
+async def test_usage_none_safe():
     msg = SimpleNamespace(content="hello", tool_calls=None)
     resp = SimpleNamespace(
         choices=[SimpleNamespace(message=msg, finish_reason="stop")],
         usage=None,
     )
     client = MagicMock()
+    client.chat.completions.create = AsyncMock()
+    client.chat.completions.parse = AsyncMock()
     client.chat.completions.create.return_value = resp
-    out = openai_complete_with_tools(
+    out = await openai_complete_with_tools(
         client=client,
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": "hi"}],
@@ -146,7 +156,7 @@ def test_usage_none_safe():
     assert out["usage"] is None
 
 
-def test_schema_uses_parse_and_returns_instance():
+async def test_schema_uses_parse_and_returns_instance():
     """With a schema, the call must go to `.parse` (constrained decoding), not
     `.create`, and the validated instance rides back under "parsed"."""
     decision = TriageDecision(target="escalate")
@@ -158,8 +168,10 @@ def test_schema_uses_parse_and_returns_instance():
         usage=SimpleNamespace(prompt_tokens=9, completion_tokens=5),
     )
     client = MagicMock()
+    client.chat.completions.create = AsyncMock()
+    client.chat.completions.parse = AsyncMock()
     client.chat.completions.parse.return_value = resp
-    out = openai_complete_with_tools(
+    out = await openai_complete_with_tools(
         client=client,
         model="gpt-5.4-mini",
         messages=[{"role": "user", "content": "hi"}],
@@ -173,15 +185,17 @@ def test_schema_uses_parse_and_returns_instance():
     assert out["parsed"] is decision
 
 
-def test_no_schema_still_uses_create_and_parsed_is_none():
+async def test_no_schema_still_uses_create_and_parsed_is_none():
     msg = SimpleNamespace(content="hello", tool_calls=None)
     resp = SimpleNamespace(
         choices=[SimpleNamespace(message=msg, finish_reason="stop")],
         usage=SimpleNamespace(prompt_tokens=9, completion_tokens=5),
     )
     client = MagicMock()
+    client.chat.completions.create = AsyncMock()
+    client.chat.completions.parse = AsyncMock()
     client.chat.completions.create.return_value = resp
-    out = openai_complete_with_tools(
+    out = await openai_complete_with_tools(
         client=client,
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": "hi"}],
@@ -193,7 +207,7 @@ def test_no_schema_still_uses_create_and_parsed_is_none():
     assert out["parsed"] is None
 
 
-def test_refusal_yields_no_parsed_instance():
+async def test_refusal_yields_no_parsed_instance():
     """A refusal is a real failure for the caller's fallback, not a parse bug —
     and never a half-valid instance handed on as if the model had decided."""
     msg = SimpleNamespace(
@@ -204,8 +218,10 @@ def test_refusal_yields_no_parsed_instance():
         usage=SimpleNamespace(prompt_tokens=9, completion_tokens=5),
     )
     client = MagicMock()
+    client.chat.completions.create = AsyncMock()
+    client.chat.completions.parse = AsyncMock()
     client.chat.completions.parse.return_value = resp
-    out = openai_complete_with_tools(
+    out = await openai_complete_with_tools(
         client=client,
         model="gpt-5.4-mini",
         messages=[{"role": "user", "content": "hi"}],
@@ -216,11 +232,11 @@ def test_refusal_yields_no_parsed_instance():
     assert out["parsed"] is None
 
 
-def test_temperature_none_lets_server_pick_sampling_defaults():
+async def test_temperature_none_lets_server_pick_sampling_defaults():
     """Self-hosted Qwen ships its own generation_config (temp 1.0, top_k 20); a fixed
     0.5 would override it and invite repetition in thinking mode."""
     client = _text_client()
-    openai_complete_with_tools(
+    await openai_complete_with_tools(
         client=client,
         model="qwen3.8-27b",
         messages=[{"role": "user", "content": "hi"}],

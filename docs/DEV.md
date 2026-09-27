@@ -172,9 +172,19 @@ test: 9B with thinking turned off. **Do not use a T4**: vLLM hung compiling Qwen
 Triton linear-attention kernels on Turing until the 20 min startup timeout.
 
 It scales to zero. A request that arrives with no container running **waits** for the
-cold start (several minutes) — it is a `@modal.web_server` Function, which holds the
-request, not an `@app.server`, which answers 503. For production, use `h100-27b` and
-add `min_containers=1` to `@app.function`.
+cold start — it is a web endpoint, which holds the request, not an `@app.server`, which
+answers 503. Cold starts restore a **GPU memory snapshot** of a loaded, warmed-up vLLM,
+so they skip the model load and compile. Snapshots are built only by `modal deploy`
+(not `modal serve`), and the first container after each deploy still pays the full
+start (5-7 min) once while it builds one. For production, use `h100-27b` and add
+`min_containers=1` to `@app.cls`.
+
+Snapshot caveats:
+- rotating the `qwen-vllm-api-key` secret needs a redeploy — the key is inside the snapshot;
+- do not delete or move weights in the `qwen-weights` Volume while a snapshot uses them,
+  or restores fail;
+- if snapshot creation fails in `modal app logs qwen-vllm` (often torch.compile), add
+  `--enforce-eager` to the profile's args first.
 
 ```bash
 uv tool install modal && modal setup                 # once: CLI + login

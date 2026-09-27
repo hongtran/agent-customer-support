@@ -6,7 +6,7 @@ from agent_customer_support.llm import _modal_client, complete_structured, compl
 from agent_customer_support.llm.schemas import TriageDecision
 
 
-def test_routes_to_anthropic_for_claude_model():
+async def test_routes_to_anthropic_for_claude_model():
     fake = {"stop_reason": "end_turn", "text": "hi", "tool_calls": []}
     with (
         patch("agent_customer_support.llm.get_settings") as gs,
@@ -14,7 +14,7 @@ def test_routes_to_anthropic_for_claude_model():
         patch("agent_customer_support.llm.anthropic_complete_with_tools", return_value=fake) as m,
     ):
         gs.return_value.agent_model = "claude-3-5-sonnet"
-        out = complete_with_tools(
+        out = await complete_with_tools(
             messages=[{"role": "user", "content": "x"}], tools=[], system=None
         )
     assert out["text"] == "hi"
@@ -24,7 +24,7 @@ def test_routes_to_anthropic_for_claude_model():
     assert "max_tokens" not in m.call_args.kwargs
 
 
-def test_routes_to_openai_for_gpt_model():
+async def test_routes_to_openai_for_gpt_model():
     fake = {"stop_reason": "stop", "text": "hi", "tool_calls": []}
     with (
         patch("agent_customer_support.llm.get_settings") as gs,
@@ -32,14 +32,14 @@ def test_routes_to_openai_for_gpt_model():
         patch("agent_customer_support.llm.openai_complete_with_tools", return_value=fake) as m,
     ):
         gs.return_value.agent_model = "gpt-4o-mini"
-        out = complete_with_tools(
+        out = await complete_with_tools(
             messages=[{"role": "user", "content": "x"}], tools=[], system=None
         )
     assert out["text"] == "hi"
     m.assert_called_once()
 
 
-def test_forwards_settings_reasoning_profile_to_openai():
+async def test_forwards_settings_reasoning_profile_to_openai():
     fake = {"stop_reason": "stop", "text": "hi", "tool_calls": []}
     with (
         patch("agent_customer_support.llm.get_settings") as gs,
@@ -49,12 +49,14 @@ def test_forwards_settings_reasoning_profile_to_openai():
         gs.return_value.agent_model = "gpt-5.4-mini"
         gs.return_value.reasoning_effort = "high"
         gs.return_value.max_output_tokens = 8000
-        complete_with_tools(messages=[{"role": "user", "content": "x"}], tools=[], system=None)
+        await complete_with_tools(
+            messages=[{"role": "user", "content": "x"}], tools=[], system=None
+        )
     assert m.call_args.kwargs["reasoning_effort"] == "high"
     assert m.call_args.kwargs["max_tokens"] == 8000
 
 
-def test_forwards_schema_to_openai_provider():
+async def test_forwards_schema_to_openai_provider():
     fake = {"stop_reason": "stop", "text": "{}", "tool_calls": [], "parsed": None}
     with (
         patch("agent_customer_support.llm.get_settings") as gs,
@@ -64,7 +66,7 @@ def test_forwards_schema_to_openai_provider():
         gs.return_value.agent_model = "gpt-5.4-mini"
         gs.return_value.reasoning_effort = "low"
         gs.return_value.max_output_tokens = 4000
-        complete_with_tools(
+        await complete_with_tools(
             messages=[{"role": "user", "content": "x"}],
             tools=[],
             system=None,
@@ -73,7 +75,7 @@ def test_forwards_schema_to_openai_provider():
     assert m.call_args.kwargs["schema"] is TriageDecision
 
 
-def test_forwards_schema_to_anthropic_provider():
+async def test_forwards_schema_to_anthropic_provider():
     """The facade routes on model name, so a claude-* override must get real
     constrained decoding too — not silently fall back to free-text JSON."""
     fake = {"stop_reason": "end_turn", "text": "{}", "tool_calls": [], "parsed": None}
@@ -83,7 +85,7 @@ def test_forwards_schema_to_anthropic_provider():
         patch("agent_customer_support.llm.anthropic_complete_with_tools", return_value=fake) as m,
     ):
         gs.return_value.agent_model = "claude-sonnet-5"
-        complete_with_tools(
+        await complete_with_tools(
             messages=[{"role": "user", "content": "x"}],
             tools=[],
             system=None,
@@ -92,7 +94,7 @@ def test_forwards_schema_to_anthropic_provider():
     assert m.call_args.kwargs["schema"] is TriageDecision
 
 
-def test_complete_structured_returns_parsed_instance():
+async def test_complete_structured_returns_parsed_instance():
     decision = TriageDecision(target="escalate")
     fake = {"stop_reason": "stop", "text": "{}", "tool_calls": [], "parsed": decision}
     with (
@@ -103,13 +105,13 @@ def test_complete_structured_returns_parsed_instance():
         gs.return_value.agent_model = "gpt-5.4-mini"
         gs.return_value.reasoning_effort = "low"
         gs.return_value.max_output_tokens = 4000
-        out = complete_structured(
+        out = await complete_structured(
             messages=[{"role": "user", "content": "x"}], schema=TriageDecision
         )
     assert out is decision
 
 
-def test_complete_structured_returns_none_when_unparsed():
+async def test_complete_structured_returns_none_when_unparsed():
     """None is the contract for 'no valid instance' — callers keep a fail-safe."""
     fake = {"stop_reason": "max_tokens", "text": None, "tool_calls": [], "parsed": None}
     with (
@@ -120,13 +122,13 @@ def test_complete_structured_returns_none_when_unparsed():
         gs.return_value.agent_model = "gpt-5.4-mini"
         gs.return_value.reasoning_effort = "low"
         gs.return_value.max_output_tokens = 4000
-        out = complete_structured(
+        out = await complete_structured(
             messages=[{"role": "user", "content": "x"}], schema=TriageDecision
         )
     assert out is None
 
 
-def _modal_call(effort: str, schema=None):
+async def _modal_call(effort: str, schema=None):
     fake = {"stop_reason": "stop", "text": "{}", "tool_calls": [], "parsed": None}
     with (
         patch("agent_customer_support.llm.get_settings") as gs,
@@ -136,15 +138,15 @@ def _modal_call(effort: str, schema=None):
         gs.return_value.agent_model = "modal/qwen3.8-27b"
         gs.return_value.reasoning_effort = effort
         gs.return_value.max_output_tokens = 4000
-        complete_with_tools(
+        await complete_with_tools(
             messages=[{"role": "user", "content": "x"}], tools=[], system=None, schema=schema
         )
     mc.assert_called_once()
     return m.call_args.kwargs
 
 
-def test_routes_modal_prefix_to_self_hosted_vllm():
-    kwargs = _modal_call("low", schema=TriageDecision)
+async def test_routes_modal_prefix_to_self_hosted_vllm():
+    kwargs = await _modal_call("low", schema=TriageDecision)
     # vLLM knows the model by its --served-model-name; the prefix is ours.
     assert kwargs["model"] == "qwen3.8-27b"
     assert kwargs["schema"] is TriageDecision
@@ -159,9 +161,9 @@ def test_routes_modal_prefix_to_self_hosted_vllm():
     ("effort", "qwen_effort"),
     [("minimal", "low"), ("low", "low"), ("medium", "medium"), ("high", "xhigh")],
 )
-def test_modal_maps_effort_to_values_the_qwen_template_accepts(effort, qwen_effort):
+async def test_modal_maps_effort_to_values_the_qwen_template_accepts(effort, qwen_effort):
     """The chat template raises on anything but low|medium|xhigh — 'high' included."""
-    kwargs = _modal_call(effort)
+    kwargs = await _modal_call(effort)
     assert kwargs["extra_body"]["chat_template_kwargs"]["reasoning_effort"] == qwen_effort
 
 
@@ -174,3 +176,46 @@ def test_modal_client_requires_url_and_key(base_url, api_key):
         with pytest.raises(RuntimeError, match="MODAL_LLM_BASE_URL"):
             _modal_client()
     _modal_client.cache_clear()
+
+
+def test_per_loop_caches_one_client_per_event_loop():
+    """A client is reused inside one loop but never handed to another: its httpx pool
+    is bound to the loop that first used it, and the evals run `asyncio.run` per row."""
+    import asyncio
+
+    from agent_customer_support.llm import _per_loop
+
+    get = _per_loop(object)
+
+    async def twice():
+        return get(), get()
+
+    a1, a2 = asyncio.run(twice())
+    b1, _ = asyncio.run(twice())
+    assert a1 is a2
+    assert b1 is not a1
+
+
+async def test_concurrent_calls_do_not_block_each_other():
+    """The reason the facade is async: two slow calls overlap instead of queueing."""
+    import asyncio
+    import time
+
+    async def slow(**_):
+        await asyncio.sleep(0.2)
+        return {"stop_reason": "stop", "text": "hi", "tool_calls": []}
+
+    with (
+        patch("agent_customer_support.llm.get_settings") as gs,
+        patch("agent_customer_support.llm._openai_client", return_value=MagicMock()),
+        patch("agent_customer_support.llm.openai_complete_with_tools", side_effect=slow),
+    ):
+        gs.return_value.agent_model = "gpt-4o-mini"
+        started = time.perf_counter()
+        await asyncio.gather(
+            *(
+                complete_with_tools(messages=[{"role": "user", "content": "x"}], tools=[])
+                for _ in range(2)
+            )
+        )
+    assert time.perf_counter() - started < 0.35
