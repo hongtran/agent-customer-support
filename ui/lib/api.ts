@@ -346,6 +346,8 @@ export interface ConversationDetail {
   conversation_id: string;
   customer_id: string;
   turns: ConversationTurn[];
+  /** Applications the user had selected in this conversation; empty for old ones. */
+  applications: string[];
 }
 
 export async function listCustomerConversations(

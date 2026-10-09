@@ -133,3 +133,26 @@ async def test_no_attachments_skips_s3_entirely():
     c.attachments.put = AsyncMock()
     await c.handle_turn(customer_id="c1", conversation_id="cv1", message="x", attachments=[])
     c.attachments.put.assert_not_awaited()
+
+
+async def test_user_turn_records_the_selected_applications():
+    c = _coord()
+    await c.handle_turn(
+        customer_id="c1",
+        conversation_id="cv1",
+        message="x",
+        attachments=[],
+        applications=["Phòng thí nghiệm"],
+    )
+    assert _persisted_user_turn(c).applications == ["Phòng thí nghiệm"]
+
+
+async def test_user_turn_keeps_the_session_scope_when_the_request_sends_none():
+    c = _coord()
+    c.sessions.get.return_value = SessionState(
+        conversation_id="cv1",
+        pending="knowledge_clarify",
+        selected_applications=["Lấy mẫu - Quan trắc"],
+    )
+    await c.handle_turn(customer_id="c1", conversation_id="cv1", message="x", attachments=[])
+    assert _persisted_user_turn(c).applications == ["Lấy mẫu - Quan trắc"]

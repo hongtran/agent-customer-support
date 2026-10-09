@@ -12,7 +12,7 @@ from agent_customer_support.channels.deps import (
     get_doc_image_store,
     require_admin,
 )
-from agent_customer_support.models import AttachmentRef, ConversationSummary
+from agent_customer_support.models import AttachmentRef, ConversationSummary, Turn
 from agent_customer_support.stores.attachment_store import AttachmentStore
 from agent_customer_support.stores.conversation_store import (
     ConversationStore,
@@ -47,6 +47,18 @@ class ConversationDetail(BaseModel):
     conversation_id: str
     customer_id: str
     turns: list[TurnOut]
+    # Every application the user had selected during the conversation, first-seen order.
+    # Empty for conversations stored before turns recorded their scope.
+    applications: list[str]
+
+
+def _applications_used(turns: list[Turn]) -> list[str]:
+    """Union of the user turns' application scopes, keeping first-seen order."""
+    seen: dict[str, None] = {}
+    for t in turns:
+        for name in t.applications:
+            seen.setdefault(name, None)
+    return list(seen)
 
 
 @router.get("")
@@ -94,5 +106,8 @@ async def get_conversation(
             refs = await image_urls.presign_attachments(attachments, t.attachments)
         turns.append(TurnOut(id=t.id, role=t.role, content=content, ts=t.ts, attachments=refs))
     return ConversationDetail(
-        conversation_id=conv.conversation_id, customer_id=conv.customer_id, turns=turns
+        conversation_id=conv.conversation_id,
+        customer_id=conv.customer_id,
+        turns=turns,
+        applications=_applications_used(conv.turns),
     )

@@ -602,7 +602,13 @@ class Coordinator:
         await self.sessions.save(session)
 
         # Persist turns. The user turn is built first so its id can key the S3 objects.
-        user_turn = Turn(role="user", content=ctx.message)
+        # The session's scope, not the request's: the widget may send no list on a turn
+        # and the session keeps the last one, so this is what actually filtered RAG.
+        user_turn = Turn(
+            role="user",
+            content=ctx.message,
+            applications=list(session.selected_applications),
+        )
         user_turn.attachments = await self._store_attachments(ctx, user_turn.id)
         await self.conversations.append(
             ctx.session.conversation_id,

@@ -201,6 +201,10 @@ class Turn(BaseModel):
     role: Literal["user", "assistant"]
     content: str
     attachments: list[StoredAttachment] = Field(default_factory=list)
+    # User turns only: the application scope (display names) in effect for this turn,
+    # copied from `SessionState.selected_applications`, which expires with the session.
+    # Empty on assistant turns and on turns stored before this field existed.
+    applications: list[str] = Field(default_factory=list)
     ts: datetime = Field(default_factory=_now)
 
 

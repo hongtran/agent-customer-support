@@ -184,8 +184,18 @@ export default function CustomerConversationsPage() {
         <section className="flex flex-1 flex-col overflow-hidden">
           {detail ? (
             <>
-              <div className="border-b border-gray-100 px-4 py-2 text-[11px] text-gray-400">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-gray-100 px-4 py-2 text-[11px] text-gray-400">
                 <span className="font-mono">{detail.conversation_id}</span>
+                {detail.applications.length > 0 && (
+                  <span className="flex flex-wrap items-center gap-1">
+                    <span>Ứng dụng:</span>
+                    {detail.applications.map((name) => (
+                      <span key={name} className="rounded bg-blue-50 px-2 py-0.5 text-blue-700">
+                        {name}
+                      </span>
+                    ))}
+                  </span>
+                )}
               </div>
               <MessageList messages={toMessages(detail)} loading={false} />
             </>
