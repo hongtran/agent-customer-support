@@ -5,6 +5,7 @@ from agent_customer_support.agents.prompts import GROUNDING_JUDGE_PROMPT, PROCES
 from agent_customer_support.config import get_settings
 from agent_customer_support.llm import complete_structured
 from agent_customer_support.llm.schemas import GroundingVerdict
+from agent_customer_support.observability import tracing
 
 MAX_INPUT_CHARS = 5000
 
@@ -168,20 +169,25 @@ class GuardrailAgent:
         if not source_passages:
             return {"pass": True, "reason": ""}
 
-        verdict = await complete_structured(
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        _question_block(question) + f"NGUỒN:\n{_sources_block(source_passages)}"
-                        f"\n\nCÂU TRẢ LỜI CẦN KIỂM TRA:\n{reply}"
-                    ),
-                }
-            ],
-            system=[PROCESS_BLOCK, {"type": "text", "text": GROUNDING_JUDGE_PROMPT}],
-            model=get_settings().model_for("guardrail"),
-            schema=GroundingVerdict,
-        )
+        # Its own agent span: the judge is called from the coordinator outside any
+        # agent, and the label is what gives it `llm.guardrail` in a trace and its own
+        # reasoning effort (config.reasoning_effort_for) instead of the composer's.
+        with tracing.agent_span(self.name, input={"reply": reply}) as sp:
+            verdict = await complete_structured(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": (
+                            _question_block(question) + f"NGUỒN:\n{_sources_block(source_passages)}"
+                            f"\n\nCÂU TRẢ LỜI CẦN KIỂM TRA:\n{reply}"
+                        ),
+                    }
+                ],
+                system=[PROCESS_BLOCK, {"type": "text", "text": GROUNDING_JUDGE_PROMPT}],
+                model=get_settings().model_for("guardrail"),
+                schema=GroundingVerdict,
+            )
+            sp.update(output=verdict.model_dump() if verdict else None)
         # Fail OPEN, deliberately the opposite of triage's fail-safe: a judge that
         # could not answer must not be allowed to silence an already-paid-for reply.
         if verdict is None:

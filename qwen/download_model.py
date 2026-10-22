@@ -1,7 +1,8 @@
 """One-off: download model weights into the `qwen-weights` Modal Volume.
 
-    modal run qwen/download_model.py                                  # 9B test model (L4 profile)
-    modal run qwen/download_model.py --repo-id Qwen/Qwen3.8-27B-FP8   # 27B model
+    modal run qwen/download_model.py                                  # 9B FP8 (l4-9b-fp8 profile)
+    modal run qwen/download_model.py --repo-id Qwen/Qwen3.5-9B        # 9B BF16 (l4-9b profile)
+    modal run qwen/download_model.py --repo-id Qwen/Qwen3.8-27B-FP8   # 27B model (h100-27b)
 
 Weights land at /root/weights/<name part of the repo id>, the path `serve.py` reads,
 so a cold start loads from disk instead of re-downloading from Hugging Face.
@@ -16,7 +17,7 @@ image = modal.Image.debian_slim().pip_install("huggingface_hub[hf_transfer]")
 
 
 @app.function(volumes={"/root/weights": volume}, image=image, timeout=1800)
-def download(repo_id: str = "Qwen/Qwen3.5-9B"):
+def download(repo_id: str = "RedHatAI/Qwen3.5-9B-FP8-dynamic"):
     import os
 
     from huggingface_hub import snapshot_download

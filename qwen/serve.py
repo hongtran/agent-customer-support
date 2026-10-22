@@ -1,13 +1,16 @@
 """Serve a Qwen model on Modal behind vLLM's OpenAI-compatible API.
 
-Pick the setup with `PROFILE` below, download its weights once
-(`modal run qwen/download_model.py --repo-id <repo>`), then `make modal-deploy`.
+Pick the setup with `QWEN_PROFILE` (see `PROFILES`), download its weights once
+(`modal run qwen/download_model.py --repo-id <repo>`), then
+`make modal-deploy PROFILE=<profile>`. Each profile is its own Modal app with its own
+URL, so several can be deployed at the same time.
 The app reaches it as `modal/<served_name>` — see `_modal_client` in
 `agent_customer_support/llm/__init__.py`.
 
-`PROFILE` is a module constant, not an env var, on purpose: Modal re-imports this
-file inside the container, so a value read from the deploy shell would not be there
-and the container would start a different model than the one it was sized for.
+`QWEN_PROFILE` is read from the deploy shell AND written into the image env: Modal
+re-imports this file inside the container, and a value that lived only in the deploy
+shell would not be there, so the container would start a different model than the
+one it was sized for.
 
 Cold starts restore a memory snapshot (CPU + GPU) taken after vLLM has loaded,
 compiled and warmed up, then put to sleep — so they skip the model load and compile
@@ -41,6 +44,10 @@ PROFILES: dict[str, dict] = {
     "l4-9b": {
         "repo_id": "Qwen/Qwen3.5-9B",
         "served_name": "qwen3.5-9b",
+        # The first app keeps its original names, so its URL
+        # (<workspace>--qwen-vllm-serve.modal.run) does not change.
+        "app_name": "qwen-vllm",
+        "label": "qwen-vllm-serve",
         "gpu": "L4",
         "concurrency": 8,
         "args": [
@@ -64,10 +71,34 @@ PROFILES: dict[str, dict] = {
             '{"temperature": 0.7, "top_p": 0.8, "top_k": 20}',
         ],
     },
+    # Same 9B model, FP8 weights (W8A8, dynamic per-token activation scales) from
+    # RedHatAI. About half the weight memory of BF16, so more of the L4 is left for
+    # KV cache. L4 (Ada, sm_89) runs FP8 natively. Its own app and URL, so it can run
+    # next to `l4-9b` for a side-by-side comparison.
+    "l4-9b-fp8": {
+        "repo_id": "RedHatAI/Qwen3.5-9B-FP8-dynamic",
+        "served_name": "qwen3.5-9b-fp8",
+        "app_name": "qwen-vllm-9b-fp8",
+        "label": "qwen-vllm-9b-fp8-serve",
+        "gpu": "L4",
+        "concurrency": 8,
+        # Same flags as `l4-9b`, so any difference comes from the weights alone.
+        "args": [
+            "--max-model-len", "32768",
+            "--max-num-seqs", "8",
+            "--gpu-memory-utilization", "0.92",
+            "--language-model-only",
+            "--default-chat-template-kwargs", '{"enable_thinking": false}',
+            "--override-generation-config",
+            '{"temperature": 0.7, "top_p": 0.8, "top_k": 20}',
+        ],
+    },
     # The real target: Qwen3.8-27B FP8 on one H100.
     "h100-27b": {
         "repo_id": "Qwen/Qwen3.8-27B-FP8",
         "served_name": "qwen3.8-27b",
+        "app_name": "qwen-vllm-27b",
+        "label": "qwen-vllm-27b-serve",
         "gpu": "H100",
         "concurrency": 32,
         "args": [
@@ -82,19 +113,24 @@ PROFILES: dict[str, dict] = {
     },
 }  # fmt: skip
 
-PROFILE = "l4-9b"
+# Chosen in the deploy shell: `QWEN_PROFILE=l4-9b-fp8 modal deploy qwen/serve.py`
+# (or `make modal-deploy PROFILE=l4-9b-fp8`). The value is also baked into the image
+# env below, so when Modal re-imports this file inside the container it reads the
+# same profile the app was deployed with, not the default.
+PROFILE = os.environ.get("QWEN_PROFILE", "l4-9b")
+if PROFILE not in PROFILES:
+    raise ValueError(f"Unknown QWEN_PROFILE {PROFILE!r}; pick one of {sorted(PROFILES)}")
 CFG = PROFILES[PROFILE]
 # Same layout download_model.py writes: /root/weights/<name part of the repo id>.
 MODEL_DIR = f"/root/weights/{CFG['repo_id'].split('/')[-1]}"
 MINUTES = 60
 
-app = modal.App("qwen-vllm")
-
 # vLLM listens here, on localhost only. The public port belongs to `_proxy_app`.
 VLLM_PORT = 8001
 VLLM_URL = f"http://127.0.0.1:{VLLM_PORT}"
 
-app = modal.App("qwen-vllm")
+# One Modal app per profile: deploying one profile never replaces another.
+app = modal.App(CFG["app_name"])
 
 image = (
     modal.Image.from_registry("nvidia/cuda:12.9.0-devel-ubuntu22.04", add_python="3.12")
@@ -102,6 +138,8 @@ image = (
     .uv_pip_install("vllm==0.29.0")
     .env(
         {
+            # Pins the profile inside the container (see PROFILE above).
+            "QWEN_PROFILE": PROFILE,
             "VLLM_LOG_STATS_INTERVAL": "10",
             # Turns on vLLM's /sleep and /wake_up endpoints, which the snapshot needs.
             # It also turns on /collective_rpc and other admin routes that --api-key
@@ -216,9 +254,9 @@ class Qwen:
         self.proc.terminate()
 
     # An ASGI app, like the web_server before it, holds a request through a cold
-    # start instead of answering 503. The label keeps the old URL
-    # (<workspace>--qwen-vllm-serve.modal.run), so MODAL_LLM_BASE_URL is unchanged.
-    @modal.asgi_app(label="qwen-vllm-serve")
+    # start instead of answering 503. The label comes from the profile, so each
+    # app has its own URL: <workspace>--<label>.modal.run.
+    @modal.asgi_app(label=CFG["label"])
     def serve(self):
         return _proxy_app()
 

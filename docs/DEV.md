@@ -159,13 +159,16 @@ logged and never breaks a request. Buffered traces are flushed on server shutdow
 
 ## Self-hosted Qwen on Modal
 
-`qwen/serve.py` runs a Qwen model behind vLLM's OpenAI-compatible API. The `PROFILE`
-constant at the top picks the setup:
+`qwen/serve.py` runs a Qwen model behind vLLM's OpenAI-compatible API. The profile is
+picked at deploy time (`make modal-deploy PROFILE=<profile>`, default `l4-9b`). Each
+profile is **its own Modal app with its own URL**, so deploying one never replaces
+another:
 
-| Profile | Model | GPU | App model name |
-|---|---|---|---|
-| `l4-9b` (default) | `Qwen/Qwen3.5-9B` (BF16, ~19 GB) | L4 | `modal/qwen3.5-9b` |
-| `h100-27b` | `Qwen/Qwen3.8-27B-FP8` (~28 GB) | H100 | `modal/qwen3.8-27b` |
+| Profile | Model | GPU | Modal app / URL label | App model name |
+|---|---|---|---|---|
+| `l4-9b` (default) | `Qwen/Qwen3.5-9B` (BF16, ~19 GB) | L4 | `qwen-vllm` / `qwen-vllm-serve` | `modal/qwen3.5-9b` |
+| `l4-9b-fp8` | `RedHatAI/Qwen3.5-9B-FP8-dynamic` (~10 GB) | L4 | `qwen-vllm-9b-fp8` / `qwen-vllm-9b-fp8-serve` | `modal/qwen3.5-9b-fp8` |
+| `h100-27b` | `Qwen/Qwen3.8-27B-FP8` (~28 GB) | H100 | `qwen-vllm-27b` / `qwen-vllm-27b-serve` | `modal/qwen3.8-27b` |
 
 `l4-9b` is a cheap **plumbing test** (routing, JSON answers, citations), not a quality
 test: 9B with thinking turned off. **Do not use a T4**: vLLM hung compiling Qwen3.5's
@@ -183,23 +186,22 @@ Snapshot caveats:
 - rotating the `qwen-vllm-api-key` secret needs a redeploy — the key is inside the snapshot;
 - do not delete or move weights in the `qwen-weights` Volume while a snapshot uses them,
   or restores fail;
-- if snapshot creation fails in `modal app logs qwen-vllm` (often torch.compile), add
+- if snapshot creation fails in `modal app logs <app>` (often torch.compile), add
   `--enforce-eager` to the profile's args first.
 
 ```bash
 uv tool install modal && modal setup                 # once: CLI + login
 modal secret create qwen-vllm-api-key VLLM_API_KEY="$(openssl rand -hex 32)"
-make modal-download                                  # once: 9B weights into the qwen-weights Volume
-# for h100-27b instead: modal run qwen/download_model.py --repo-id Qwen/Qwen3.8-27B-FP8
-make modal-deploy                                    # prints the server URL
+modal run qwen/download_model.py --repo-id <repo_id of the profile>   # once per model
+make modal-deploy PROFILE=<profile>                  # prints the server URL
 ```
 
 Then in `.env`:
 
 ```bash
-MODAL_LLM_BASE_URL=https://<workspace>--qwen-vllm-serve.modal.run/v1   # URL printed by deploy + /v1
+MODAL_LLM_BASE_URL=https://<workspace>--<label>.modal.run/v1   # URL printed by deploy + /v1
 MODAL_LLM_API_KEY=<same value as VLLM_API_KEY>
-KNOWLEDGE_MODEL=modal/qwen3.5-9b        # or modal/qwen3.8-27b for the h100-27b profile
+KNOWLEDGE_MODEL=modal/qwen3.5-9b        # the profile's "App model name" from the table
 ```
 
 Smoke test (the first call may take minutes while the container starts; `-L` follows
@@ -209,7 +211,7 @@ Modal's 303 redirects during a long wait):
 curl -L "$MODAL_LLM_BASE_URL/models" -H "Authorization: Bearer $MODAL_LLM_API_KEY"
 ```
 
-**If the server fails to start**, watch `modal app logs qwen-vllm`:
+**If the server fails to start**, watch `modal app logs <app>`:
 - out of memory → lower `--gpu-memory-utilization` or `--max-num-seqs` (not `--max-model-len`:
   compose prompts are ~12K tokens plus a 4K output reserve, so below ~20K requests fail with 400)
 - CUDA graph / compile error → add `--enforce-eager` (slower output)

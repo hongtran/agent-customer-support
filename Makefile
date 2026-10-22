@@ -21,7 +21,9 @@ infra-up:
 infra-down:
 	docker compose down
 # Self-hosted Qwen on Modal (needs the `modal` CLI: uv tool install modal && modal setup)
+# make modal-deploy PROFILE=l4-9b-fp8   (profiles: see PROFILES in qwen/serve.py)
+PROFILE ?= l4-9b
 modal-download:
 	modal run qwen/download_model.py
 modal-deploy:
-	modal deploy qwen/serve.py
+	QWEN_PROFILE=$(PROFILE) modal deploy qwen/serve.py

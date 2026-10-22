@@ -149,9 +149,12 @@ async def _one(test: TestQuestion, mode: str, k: int, scope: bool) -> dict:
             "outcome": run.outcome,
             "abstained": run.abstained,
             "accuracy": verdict.accuracy,
-            "completeness": verdict.completeness,
-            "relevance": verdict.relevance,
-            "faithfulness": verdict.faithfulness,
+            "rubric_score": verdict.rubric_score,
+            "facts_found": verdict.facts_found,
+            "facts_total": verdict.facts_total,
+            "core_missed": " | ".join(verdict.core_missed),
+            "minor_missed": " | ".join(verdict.minor_missed),
+            "wrong_instructions": " | ".join(verdict.wrong_instructions),
             "feedback": verdict.feedback,
             "answer": run.answer,
             # Distinct from the retrieval block's `citations`: those are every chunk
@@ -305,13 +308,21 @@ def retrieval_detail(rows: list[dict], full: bool = False) -> str:
     return "\n".join(lines)
 
 
+def _fact_recall(r: dict) -> float:
+    total = int(r.get("facts_total") or 0)
+    return int(r.get("facts_found") or 0) / total if total else 0.0
+
+
 def _answer_block(rows: list[dict]) -> dict:
+    # Fact recall only over rows that have key facts: a rubric-only row has none to
+    # find, and counting it as 0 would read as a recall drop.
+    with_facts = [r for r in rows if int(r.get("facts_total") or 0)]
     return {
         "n": len(rows),
         "Accuracy": _mean([r["accuracy"] for r in rows]),
-        "Complete": _mean([r["completeness"] for r in rows]),
-        "Relevance": _mean([r["relevance"] for r in rows]),
-        "Faithful": _mean([r["faithfulness"] for r in rows]),
+        "Score5%": _pct([r["accuracy"] == 5 for r in rows]),
+        "FactRecall": _mean([_fact_recall(r) for r in with_facts]),
+        "Wrong%": _pct([bool(r.get("wrong_instructions")) for r in rows]),
         "Answered%": _pct([not r["abstained"] for r in rows]),
     }
 
@@ -493,6 +504,13 @@ def summarise(
             )
         )
 
+        no_facts = [r for r in answerable if not int(r.get("facts_total") or 0)]
+        if no_facts:
+            out.append(
+                f"\n  !! {len(no_facts)} answerable rows have no key_facts -- scored by the "
+                "judge's rubric alone (less repeatable). Run eval.extract_key_facts."
+            )
+
         outcomes: dict[str, int] = defaultdict(int)
         for r in answerable:
             outcomes[r["outcome"]] += 1
@@ -502,19 +520,15 @@ def summarise(
             out.append(f"  {name:<16} {count:3d}  ({100 * count / len(answerable):.0f}%)")
 
     if mode in ("answer", "both") and adversarial:
-        # These rows are correct when the agent declines. Accuracy is still scored
-        # (the judge is told the ideal answer admits ignorance) and faithfulness <= 2
-        # is the hallucination signal.
+        # These rows are correct when the agent declines. The judge is told so, and
+        # `accuracy_score` gives 1 to an answer that invented specifics instead.
         out.append("\nADVERSARIAL ROWS (should not be answered)")
         out.append("-" * 40)
         out.append(f"  rows                 {len(adversarial):3d}")
         out.append(f"  abstained            {_pct([r['abstained'] for r in adversarial]):.0f}%")
         out.append(f"  mean accuracy        {_mean([r['accuracy'] for r in adversarial]):.2f}/5")
-        out.append(
-            f"  mean faithfulness    {_mean([r['faithfulness'] for r in adversarial]):.2f}/5"
-        )
-        halluc = [r for r in adversarial if r["faithfulness"] <= 2]
-        out.append(f"  hallucinated (F<=2)  {len(halluc):3d}")
+        halluc = [r for r in adversarial if 0 < r["accuracy"] <= 2]
+        out.append(f"  hallucinated (A<=2)  {len(halluc):3d}")
         for r in halluc:
             out.append(f"      {r['id']}  {r['question'][:64]}")
 
@@ -533,13 +547,14 @@ def summarise(
     if mode in ("answer", "both"):
         weak = sorted(
             (r for r in ok if r["answerable"]),
-            key=lambda r: (r["accuracy"], r["faithfulness"]),
+            key=lambda r: (r["accuracy"], _fact_recall(r)),
         )[:10]
         out.append("\nWEAKEST ANSWERABLE ROWS")
         out.append("-" * 40)
         for r in weak:
             out.append(
-                f"  {r['id']}  acc={r['accuracy']:.0f} faith={r['faithfulness']:.0f} "
+                f"  {r['id']}  acc={r['accuracy']:.0f} "
+                f"facts={r.get('facts_found', 0)}/{r.get('facts_total', 0)} "
                 f"mrr={r.get('mrr', float('nan')):.2f} [{r['outcome']}] {r['question'][:56]}"
             )
 
