@@ -13,6 +13,7 @@ from agent_customer_support.stores.customer_registry import CustomerRegistry
 from agent_customer_support.stores.doc_image_store import DocImageStore
 from agent_customer_support.stores.feedback_store import FeedbackStore
 from agent_customer_support.stores.qa_store import QAStore
+from agent_customer_support.stores.request_backlog import RequestBacklog
 from agent_customer_support.stores.usage_store import UsageStore
 
 
@@ -54,6 +55,11 @@ def get_attachment_store() -> AttachmentStore:
 @lru_cache
 def get_doc_image_store() -> DocImageStore:
     return DocImageStore()
+
+
+@lru_cache
+def get_request_backlog() -> RequestBacklog:
+    return RequestBacklog()
 
 
 # auto_error=False so a missing header reaches our own handler and returns the same

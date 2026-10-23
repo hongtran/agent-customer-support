@@ -9,6 +9,10 @@ from agent_customer_support.channels.admin_conversations import (
 )
 from agent_customer_support.channels.admin_customers import router as admin_customers_router
 from agent_customer_support.channels.auth import router as auth_router
+from agent_customer_support.channels.issues import (
+    admin_router as admin_issues_router,
+    widget_router as widget_issues_router,
+)
 from agent_customer_support.channels.deps import get_qa_indexer
 from agent_customer_support.config import get_settings
 from agent_customer_support.stores.qa_store import QAStore
@@ -75,6 +79,8 @@ app.include_router(widget_router)
 app.include_router(admin_router)
 app.include_router(admin_customers_router)
 app.include_router(admin_conversations_router)
+app.include_router(widget_issues_router)
+app.include_router(admin_issues_router)
 
 
 @app.get("/health")
