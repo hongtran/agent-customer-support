@@ -98,6 +98,12 @@ export default function ConfigBar({
               Còn {questionsRemaining} câu hỏi hôm nay
             </span>
           )}
+          <Link
+            href="/issues"
+            className="rounded bg-gray-200 px-3 py-1 text-xs text-gray-700 hover:bg-gray-300"
+          >
+            Sự cố đã báo
+          </Link>
           {me.role === "admin" && (
             <Link
               href="/admin"

@@ -282,6 +282,45 @@ turn will get, and `_evidence_files` walks user turns from there (S3 keys, read 
 fails drops that one file. Capped to the most recent `mantis_max_files`. The bytes exist
 only for the duration of the turn — the `Attachment` / `StoredAttachment` split stands.
 
+### Issue tracking
+
+A verified bug's backlog row doubles as the issue the customer follows. `RequestRecord.status`
+is `pending | processing | completed | no_issue`; every row starts `pending` and only an
+admin moves it. Rows written before the field existed have no `status` attribute and read
+as `pending`.
+
+The admin edit is `PATCH /admin/customers/{id}/issues/{issue_id}` with any of `status`,
+`note` (CS's text to the customer, optional for every status, shown on both sides) and
+`due_date` (a plain `YYYY-MM-DD`, the date CS expects the fix). A field left out is not
+touched and an explicit `null` clears it (`model_fields_set`); an empty body is a 422.
+`RequestBacklog.update_issue` applies it as **one** conditional `update_item` that also
+checks the row is a bug of that customer. A status change appends a `StatusChange`
+(`status, at, by, note`) to `status_history` with
+`list_append(if_not_exists(...))` — server-side, so two admins saving at once both land —
+and sets `resolved_at` on reaching `completed`/`no_issue` (removed on reopening). Those two
+fields exist for a resolution-time report that is **not built yet**: it is
+`resolved_at - created_at`, and rows filed before the history existed have an empty one
+whose implicit start is `created_at`. The UI sends `status` only when it changed, so
+saving a note alone adds no history entry. Saving does nothing else — no mail, no
+MantisBT note.
+
+The customer sees their own list at `/widget/me/issues` (tenant from the token, no path id)
+and CS sees it per customer, in the "Sự cố" tab of `/admin/customers/{id}`
+(`channels/issues.py`). **There is no all-customers list on purpose**: both lists are a
+query on the `customer_id-created_at-index` GSI of the requests table, filtered to
+`type == "bug"`; an all-customers view would be a full-table scan that reads and bills every
+tenant's transcripts on each load. The GSI projects only the list fields (not the
+transcript). **A projection is fixed when the index is created**, so `note`, `due_date`,
+`resolved_at` and `status_history` are on `IssueDetail` (a full `get_item`) and not on the
+list rows — showing one in the list means recreating the index in prod. `RequestBacklog.init` creates it, or adds it to a table that predates it, only
+when `dynamodb_auto_create_tables` is on — **in prod the index is infrastructure's job**.
+
+The detail shows the row's `summary` and its stored `transcript`, i.e. the conversation as
+it stood when the ticket was filed, not the live conversation (the row has no
+`conversation_id`). `[[img:…]]` markers in it are signed on read
+(`image_urls.resolve_doc_images`); the UI splits it back into bubbles on the
+`user:` / `assistant:` prefixes (`ui/lib/transcript.ts`).
+
 ### Contact follow-up
 
 The customer account is shared by a whole company, so after a handoff CS still needs to
@@ -328,7 +367,7 @@ added as CC on top of `CS_MAIL_CC`; `CS_MAIL_TO` still gets every mail.
 | `ConversationStore` | DynamoDB | Full message history |
 | `CustomerRegistry` | DynamoDB | Customer profiles & enabled modules |
 | `FlowStore` | DynamoDB | Flow definitions (seeded via `scripts/import_flows.py`) |
-| `RequestBacklog` | DynamoDB | Bug/feature/how-to records logged on escalation |
+| `RequestBacklog` | DynamoDB | Bug/feature/how-to records logged on escalation; bug rows are the customer-visible issues (status, by-customer GSI) |
 | `AttachmentStore` | S3 | Uploaded screenshot bytes; the turn keeps only the key |
 | `UsageStore` | DynamoDB | Per-customer daily question counter (rate limit) |
 | `FeedbackStore` | DynamoDB | Like/dislike per assistant message, keyed `message_id` (latest vote wins, clear deletes) |

@@ -1,7 +1,7 @@
 import base64
 import re
 from binascii import Error as BinasciiError
-from datetime import datetime, UTC
+from datetime import date, datetime, UTC
 from typing import Annotated, Literal
 from uuid import uuid4
 from pydantic import (
@@ -250,6 +250,24 @@ class ConversationSummary(BaseModel):
 
 # ---- Request backlog ----
 
+# Where a verified bug stands, as CS reports it back to the customer. "no_issue" means
+# CS looked and the software behaves as intended.
+IssueStatus = Literal["pending", "processing", "completed", "no_issue"]
+
+# The statuses that close an issue; reaching one sets `RequestRecord.resolved_at`.
+RESOLVED_STATUSES: frozenset[str] = frozenset({"completed", "no_issue"})
+
+
+class StatusChange(BaseModel):
+    """One admin status change, appended to `RequestRecord.status_history`."""
+
+    status: IssueStatus
+    at: datetime
+    by: str  # the admin's customer_id
+    # The note sent in the same save, if any. Kept per entry so the history still says
+    # why after `RequestRecord.note` is rewritten.
+    note: str | None = None
+
 
 class RequestRecord(BaseModel):
     id: str
@@ -268,6 +286,48 @@ class RequestRecord(BaseModel):
     # Filled in later by RequestBacklog.set_contact when the user answers the contact ask.
     contact: ContactInfo | None = None
     created_at: datetime = Field(default_factory=_now)
+    # Set by an admin (RequestBacklog.set_status). Rows written before the field
+    # existed have no attribute and read as "pending".
+    status: IssueStatus = "pending"
+    status_updated_at: datetime | None = None
+    status_updated_by: str | None = None
+    # CS's current note to the customer, and the date CS expects the fix.
+    note: str | None = None
+    due_date: date | None = None
+    # Set on reaching a RESOLVED_STATUSES status, removed on going back. Derivable from
+    # the history, but kept top-level so a resolution-time report is just
+    # `resolved_at - created_at`.
+    resolved_at: datetime | None = None
+    # Every status change, oldest first. Appended server-side, never rewritten. Rows
+    # filed before it existed have none; their start is `created_at`.
+    status_history: list[StatusChange] = Field(default_factory=list)
+
+
+class IssueSummary(BaseModel):
+    """One row of an issue list: a bug `RequestRecord` without its transcript."""
+
+    id: str
+    customer_id: str
+    title: str | None = None
+    summary: str
+    application: str | None = None
+    status: IssueStatus = "pending"
+    created_at: datetime
+    status_updated_at: datetime | None = None
+    mantis_issue_id: int | None = None
+    mantis_issue_url: str | None = None
+
+
+class IssueDetail(IssueSummary):
+    """An issue as opened. The fields below are not on `IssueSummary` because the list is
+    read from the by-customer GSI, whose projection is fixed when the index is created."""
+
+    note: str | None = None
+    due_date: date | None = None
+    resolved_at: datetime | None = None
+    status_history: list[StatusChange] = Field(default_factory=list)
+    # The transcript frozen on the row when the ticket was filed, image markers resolved.
+    transcript: str = ""
 
 
 # ---- Q&A learning loop ----

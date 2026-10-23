@@ -371,3 +371,98 @@ export async function getCustomerConversation(
   if (!r.ok) throw new Error(`get conversation failed: ${r.status}`);
   return r.json();
 }
+
+/* ------------------------------------------------------------- issues */
+
+/** Where a reported bug stands. Set by CS; every new issue starts "pending". */
+export type IssueStatus = "pending" | "processing" | "completed" | "no_issue";
+
+export const ISSUE_STATUSES: IssueStatus[] = ["pending", "processing", "completed", "no_issue"];
+
+/** One verified bug the agent filed for this customer. */
+export interface IssueSummary {
+  id: string;
+  customer_id: string;
+  title: string | null;
+  summary: string;
+  application: string | null;
+  status: IssueStatus;
+  created_at: string;
+  status_updated_at: string | null;
+  mantis_issue_id: number | null;
+  mantis_issue_url: string | null;
+}
+
+/**
+ * An issue with the conversation as it stood when the ticket was filed: plain
+ * `user: …` / `assistant: …` lines. Guide images in assistant lines are already
+ * `![screen](url)` with an expiring URL — reopen the issue to re-sign them.
+ */
+export interface IssueDetail extends IssueSummary {
+  /** CS's note to the customer; null = none. */
+  note: string | null;
+  /** The date CS expects the fix, "YYYY-MM-DD" (a calendar date, no time zone). */
+  due_date: string | null;
+  /** When the issue reached completed / no_issue; null while open. */
+  resolved_at: string | null;
+  /** Every status change, oldest first. Stored for reporting; not shown yet. */
+  status_history: StatusChange[];
+  transcript: string;
+}
+
+export interface StatusChange {
+  status: IssueStatus;
+  at: string;
+  by: string;
+  note: string | null;
+}
+
+/** An admin edit. Leave a field out to keep it; send null to clear note / due_date. */
+export interface IssuePatch {
+  status?: IssueStatus;
+  note?: string | null;
+  due_date?: string | null;
+}
+
+export async function listMyIssues(): Promise<IssueSummary[]> {
+  const r = await request("/widget/me/issues");
+  if (!r.ok) throw new Error(`list issues failed: ${r.status}`);
+  return r.json();
+}
+
+export async function getMyIssue(id: string): Promise<IssueDetail> {
+  const r = await request(`/widget/me/issues/${encodeURIComponent(id)}`);
+  if (!r.ok) throw new Error(`get issue failed: ${r.status}`);
+  return r.json();
+}
+
+function customerIssuesPath(customerId: string, id?: string): string {
+  const base = `/admin/customers/${encodeURIComponent(customerId)}/issues`;
+  return id ? `${base}/${encodeURIComponent(id)}` : base;
+}
+
+export async function listCustomerIssues(customerId: string): Promise<IssueSummary[]> {
+  const r = await request(customerIssuesPath(customerId));
+  if (r.status === 404) throw new Error(`Không tìm thấy khách hàng "${customerId}"`);
+  if (!r.ok) throw new Error(`list issues failed: ${r.status}`);
+  return r.json();
+}
+
+export async function getCustomerIssue(customerId: string, id: string): Promise<IssueDetail> {
+  const r = await request(customerIssuesPath(customerId, id));
+  if (!r.ok) throw new Error(`get issue failed: ${r.status}`);
+  return r.json();
+}
+
+export async function updateIssue(
+  customerId: string,
+  id: string,
+  patch: IssuePatch,
+): Promise<IssueDetail> {
+  const r = await request(customerIssuesPath(customerId, id), {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+  if (!r.ok) throw new Error(`update issue failed: ${r.status}`);
+  return r.json();
+}

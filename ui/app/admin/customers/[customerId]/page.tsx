@@ -1,16 +1,24 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   ConversationDetail,
   ConversationSummary,
+  IssuePatch,
+  IssueSummary,
   getCustomerConversation,
+  getCustomerIssue,
   listCustomerConversations,
+  listCustomerIssues,
+  updateIssue,
 } from "@/lib/api";
 import { logout, useSession } from "@/lib/useSession";
 import MessageList, { type Message } from "@/components/MessageList";
+import IssueView from "@/components/IssueView";
+
+type Tab = "conversations" | "issues";
 
 function formatTime(iso: string | null): string {
   if (!iso) return "";
@@ -46,6 +54,20 @@ export default function CustomerConversationsPage() {
   // The conversation most recently clicked. A response for any other id is stale — the
   // user clicked away before it arrived — and is dropped.
   const latest = useRef<string | null>(null);
+  const [tab, setTab] = useState<Tab>("conversations");
+  // Open issues (pending + processing), reported by IssueView for the tab label.
+  const [openIssues, setOpenIssues] = useState<number | null>(null);
+
+  // Stable per customer: IssueView reloads its list whenever these change identity.
+  const loadIssues = useCallback(() => listCustomerIssues(customerId), [customerId]);
+  const loadIssue = useCallback((id: string) => getCustomerIssue(customerId, id), [customerId]);
+  const saveIssue = useCallback(
+    (id: string, patch: IssuePatch) => updateIssue(customerId, id, patch),
+    [customerId],
+  );
+  const countOpen = useCallback((items: IssueSummary[]) => {
+    setOpenIssues(items.filter((i) => i.status === "pending" || i.status === "processing").length);
+  }, []);
 
   const isAdmin = session.status === "ready" && session.me.role === "admin";
 
@@ -85,6 +107,11 @@ export default function CustomerConversationsPage() {
     }
   }
 
+  const tabCls = (active: boolean) =>
+    `rounded px-3 py-1 text-xs ${
+      active ? "bg-blue-100 text-blue-700" : "text-gray-500 hover:bg-gray-200"
+    }`;
+
   if (session.status === "loading") {
     return <div className="flex h-screen items-center justify-center text-sm text-gray-400">…</div>;
   }
@@ -107,8 +134,16 @@ export default function CustomerConversationsPage() {
           ← Khách hàng
         </Link>
         <h1 className="text-sm font-semibold text-gray-700">
-          Hội thoại của <span className="font-mono">{customerId}</span>
+          Khách hàng <span className="font-mono">{customerId}</span>
         </h1>
+        <nav className="ml-4 flex gap-1">
+          <button onClick={() => setTab("conversations")} className={tabCls(tab === "conversations")}>
+            Hội thoại
+          </button>
+          <button onClick={() => setTab("issues")} className={tabCls(tab === "issues")}>
+            Sự cố{openIssues ? ` (${openIssues})` : ""}
+          </button>
+        </nav>
         <div className="ml-auto flex items-center gap-2">
           <span className="text-xs text-gray-500">{session.me.name}</span>
           <button
@@ -120,11 +155,23 @@ export default function CustomerConversationsPage() {
         </div>
       </header>
 
-      {error && (
+      {/* Both tabs stay mounted, so the issue count is known before the tab is opened
+          and switching tabs keeps each one's selection. */}
+      <div className={tab === "issues" ? "flex flex-1 flex-col overflow-hidden" : "hidden"}>
+        <IssueView
+          loadList={loadIssues}
+          loadDetail={loadIssue}
+          onUpdate={saveIssue}
+          onItemsChange={countOpen}
+          emptyText="Khách hàng này chưa báo sự cố nào."
+        />
+      </div>
+
+      {tab === "conversations" && error && (
         <div className="border-b border-rose-200 bg-rose-50 px-4 py-2 text-xs text-rose-700">{error}</div>
       )}
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className={tab === "conversations" ? "flex flex-1 overflow-hidden" : "hidden"}>
         <aside className="flex w-96 flex-col border-r border-gray-200">
           <div className="flex items-center justify-between border-b border-gray-100 px-4 py-2">
             <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">
