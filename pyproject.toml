@@ -22,7 +22,9 @@ environs = "^15.0.1"
 tenacity = "^9.1.4"
 openpyxl = "^3.1.5"
 langfuse = "^4.7.1"
-qdrant-client = "^1.18.0"
+# The client must stay within one minor version of the Qdrant server (1.17.x),
+# or it warns on every start. Move this together with the server.
+qdrant-client = "~1.18.0"
 pyjwt = "^2.13.0"
 bcrypt = "^5.0.0"
 
