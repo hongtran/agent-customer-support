@@ -24,7 +24,7 @@ class DocImageStore:
     yields an empty set and a plain-text answer. That is the same code path a document
     *with* images takes — there is no per-document flag anywhere.
 
-    Reuses attachment_store.get_client so both S3 callers share the LocalStack endpoint
+    Reuses attachment_store.get_client so both S3 callers share the local MinIO endpoint
     override and region.
     """
 

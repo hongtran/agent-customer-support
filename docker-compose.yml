@@ -1,8 +1,45 @@
 services:
   dynamodb:
     image: amazon/dynamodb-local:2.5.2
-    command: "-jar DynamoDBLocal.jar -inMemory -sharedDb"
+    # Data is written to a file in the named volume below, so it survives a
+    # container or machine restart. (`-inMemory` lost everything on restart.)
+    command: "-jar DynamoDBLocal.jar -sharedDb -dbPath ./data"
+    working_dir: /home/dynamodblocal
+    # The image runs as a non-root user that cannot write to a fresh volume.
+    user: root
+    volumes:
+      - dynamodb-data:/home/dynamodblocal/data
     ports: ["8000:8000"]
+    restart: unless-stopped
+  # Tests only (tests/conftest.py). In memory on purpose: the tests write fixed
+  # ids, so they must never share tables with the persistent dev database above.
+  dynamodb-test:
+    image: amazon/dynamodb-local:2.5.2
+    command: "-jar DynamoDBLocal.jar -inMemory -sharedDb"
+    ports: ["8002:8000"]
+    restart: unless-stopped
   redis:
     image: redis:7-alpine
     ports: ["6379:6379"]
+    restart: unless-stopped
+  # S3 for local dev. Replaces LocalStack, whose free version keeps S3 in memory
+  # only. pgsty/minio is a community build of MinIO, because the official image is
+  # no longer published; same server, same settings. Port 9000 is the S3 API,
+  # 9001 the web console (log in with the credentials below). The root password
+  # must be at least 8 characters.
+  minio:
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+      # Must match AWS_REGION, or create_bucket's LocationConstraint is rejected.
+      MINIO_REGION: ap-southeast-1
+    volumes:
+      - minio-data:/data
+    ports: ["9000:9000", "9001:9001"]
+    restart: unless-stopped
+
+volumes:
+  dynamodb-data:
+  minio-data:

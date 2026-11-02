@@ -25,7 +25,7 @@ poetry run pytest tests/agents/test_triage.py::test_some_case -v
 make lint
 ```
 
-Tests use DynamoDB Local + `fakeredis` — no real AWS credentials needed. `conftest.py` stubs all required env vars.
+Tests use the in-memory `dynamodb-test` container (port 8002, never the persistent dev one on 8000), MinIO with their own `acs-test-attachments` bucket, and `fakeredis` — no real AWS credentials needed. `conftest.py` stubs all required env vars.
 
 ## Architecture
 
@@ -195,14 +195,13 @@ branch returned no evidence at all, which is why no slot state could survive a t
 
 **Earlier screenshots are shown again.** An image used to reach the model only on the
 turn it was sent, so a screen name or an error dialog the model missed then was lost
-for good. `_step_issue_verification` now reads the screenshots sent **since the start of
-the conversation** (turn 0, not `since_turn` — the error screenshot often arrives with the
-question Knowledge answered before the bug was suspected) back from S3
-(`Coordinator._stored_images`, shared with the ticket's `_evidence_files`) and passes the
-newest two as `ctx.evidence_images`; the agent attaches them to the slots note, leaving
-the user's own message untouched. The ticket still takes only images since `since_turn`.
-Every verification turn therefore pays an S3 read per earlier screenshot, and the
-confirming turn reads the in-range ones twice (verifier, then ticket), which was left as
+for good. `_step_issue_verification` now passes the **newest two** screenshots sent on
+earlier turns **since the start of the conversation** — not only since the bug was
+suspected, because the error screenshot often arrives with the question Knowledge
+answered first — read back from S3 by `Coordinator._prior_images`, as
+`ctx.evidence_images`; the agent attaches them to the slots note, leaving the user's own
+message untouched. The keys are picked before reading, so older screenshots cost no S3
+read. The confirming turn reads the two twice (verifier, then ticket), which was left as
 is rather than cached.
 
 **A slot is asked at most once, in code.** A prompt alone did not hold this: in a live
@@ -275,11 +274,14 @@ rejects the whole issue when that user does not exist or cannot see the project,
 on a create **with** a handler is retried once without it: a typo in the form costs the
 assignment, not the ticket.
 
-Evidence is **every image since the bug was suspected, and nothing before it**:
-`_new_verify_context` stamps `since_turn` with the index the current
-turn will get, and `_evidence_files` walks user turns from there (S3 keys, read back via
-`AttachmentStore.get_bytes`) plus the current turn (still base64 in memory). A read that
-fails drops that one file. Capped to the most recent `mantis_max_files`. The bytes exist
+Evidence is **exactly what the verifier is shown**: `_evidence_files` takes the same
+`_prior_images` (the newest two earlier screenshots, from turn 0) plus the current turn
+(still base64 in memory). It used to read only from the turn the bug was suspected
+(`since_turn`, now removed), so a screenshot sent with an earlier question was read by
+the verifier — its error text landed in the slots and `has_image` printed "(đính kèm)" —
+yet never reached the ticket. The cost of the shared window: an unrelated screenshot
+among the newest two of the conversation is filed too. A read that fails drops that one
+file. Capped to the most recent `mantis_max_files`. The bytes exist
 only for the duration of the turn — the `Attachment` / `StoredAttachment` split stands.
 
 ### Issue tracking
@@ -587,6 +589,6 @@ See `.env-example`. The important runtime ones:
 - `RESEND_API_KEY` / `CS_MAIL_FROM` / `CS_MAIL_TO` — CS notification email via Resend; off unless all three are set. `CS_MAIL_CC` (comma-separated, optional) adds CC recipients. `CS_MAIL_FROM` must be on a domain verified in Resend
 - `LANGFUSE_*` — optional tracing; leave blank to disable
 - `DYNAMODB_ENDPOINT_URL` — set to `http://localhost:8000` for local dev
-- `S3_ENDPOINT_URL` / `S3_BUCKET_ATTACHMENTS` — attachment storage; `http://localhost:4566` for LocalStack. `MAX_ATTACHMENT_BYTES` (default 5 MB) is the upload cap, `S3_PRESIGN_EXPIRY_SECONDS` (default 1h) the display-URL lifetime.
+- `S3_ENDPOINT_URL` / `S3_BUCKET_ATTACHMENTS` — attachment storage; `http://localhost:9000` for MinIO. `MAX_ATTACHMENT_BYTES` (default 5 MB) is the upload cap, `S3_PRESIGN_EXPIRY_SECONDS` (default 1h) the display-URL lifetime.
 
-Note LocalStack is **not** part of `docker-compose.yml` — `make infra-up` starts only DynamoDB Local and Redis. Run LocalStack separately for the S3 path.
+`make infra-up` starts DynamoDB Local, Redis and MinIO (S3 API on 9000, console on 9001). DynamoDB and MinIO write to named volumes, so their data survives a restart; `docker compose down -v` deletes it. MinIO replaced LocalStack because free LocalStack keeps S3 in memory only. MinIO checks credentials, so `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` must equal its root user/password (`minioadmin` / `minioadmin`); the S3 client uses path-style URLs whenever `S3_ENDPOINT_URL` is set.

@@ -3,6 +3,7 @@ import contextlib
 import logging
 
 import aioboto3
+from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from agent_customer_support.config import get_settings
@@ -22,12 +23,19 @@ def _session() -> aioboto3.Session:
 @contextlib.asynccontextmanager
 async def get_client():
     """S3 client, mirroring stores/dynamo.get_resource so both AWS clients are
-    configured the same way (endpoint override for LocalStack, shared region)."""
+    configured the same way (endpoint override for local MinIO, shared region).
+
+    A local endpoint gets path-style URLs (`host/bucket/key`): MinIO does not serve
+    `bucket.host` URLs unless configured with a domain, and the presigned URLs the
+    widget loads must resolve. Real AWS keeps the default virtual-hosted style.
+    """
     s = get_settings()
+    config = Config(s3={"addressing_style": "path"}) if s.s3_endpoint_url else None
     async with _session().client(
         "s3",
         endpoint_url=s.s3_endpoint_url,
         region_name=s.aws_region,
+        config=config,
     ) as s3:
         yield s3
 
@@ -60,9 +68,13 @@ class AttachmentStore:
                 if code not in ("BucketAlreadyOwnedByYou", "BucketAlreadyExists"):
                     raise
             # Screenshots routinely contain customer data, so the bucket must never be
-            # world-readable; reads go through presigned URLs instead. Not all S3-
-            # compatible endpoints implement this call, and it is a hardening step
-            # rather than a correctness one, so a failure only warns.
+            # world-readable; reads go through presigned URLs instead. This is an AWS
+            # setting: a local endpoint (MinIO) rejects it as MalformedXML, and its
+            # buckets are private unless given a public policy, so it is skipped
+            # there. It is a hardening step, not a correctness one, so a failure on
+            # AWS only warns.
+            if cfg.s3_endpoint_url:
+                return
             try:
                 await s3.put_public_access_block(
                     Bucket=self.bucket,
