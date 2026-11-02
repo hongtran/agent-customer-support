@@ -1,3 +1,5 @@
+import uuid
+
 import pytest
 from agent_customer_support.models import QARecord
 from agent_customer_support.stores.qa_store import QAStore
@@ -36,7 +38,10 @@ async def test_list_filters_by_status():
 async def test_find_by_feedback_message_id():
     store = QAStore()
     await store.init()
-    rec = await store.add(QARecord(question="q", source="feedback", feedback_message_id="msg-123"))
-    found = await store.find_by_feedback_message_id("msg-123")
+    # Unique per run: the tables outlive a test run, and a fixed id would match an
+    # earlier run's record.
+    msg_id = f"msg-{uuid.uuid4()}"
+    rec = await store.add(QARecord(question="q", source="feedback", feedback_message_id=msg_id))
+    found = await store.find_by_feedback_message_id(msg_id)
     assert found and found.id == rec.id
     assert await store.find_by_feedback_message_id("nope") is None

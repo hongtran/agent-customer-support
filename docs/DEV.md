@@ -19,7 +19,7 @@ poetry install
 #    imports enterprise_llm_service.
 poetry run pip install --no-deps /path/to/enterprise-llm-service/dist/enterprise_llm_service-1.0.3-py3-none-any.whl
 
-# 4. Start dev infra (DynamoDB Local + Redis)
+# 4. Start dev infra (DynamoDB Local + Redis + MinIO for S3)
 docker compose up -d
 
 # 5. Copy env file and fill in API keys

@@ -487,7 +487,7 @@ class VerifyContext(BaseModel):
 
     A typed view over the dict rather than a replacement for it: the dict is what
     Redis already holds, and sessions written before this type existed carry only
-    `application`, `summary` and `since_turn`. Every field therefore has a default,
+    `application` and `summary`. Every field therefore has a default,
     and extra keys are ignored, so a live session mid-flow keeps working across a
     deploy instead of failing validation and losing the collected evidence.
     """
@@ -497,10 +497,6 @@ class VerifyContext(BaseModel):
     # on why the two are not the same field.
     application: str | None = None
     summary: str = ""
-    # Index of the turn the bug was first suspected on. The ticket attaches
-    # screenshots from there onward only, so an unrelated image sent earlier in the
-    # same conversation never lands on it.
-    since_turn: int = 0
     slots: BugSlots = Field(default_factory=BugSlots.empty)
     has_image: bool = False
     # The ask-once guard (IssueVerificationAgent._guard). `asked_last` is what the

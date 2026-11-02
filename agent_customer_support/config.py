@@ -54,7 +54,7 @@ class Settings(BaseSettings):
 
     # Attachment storage (S3). Image bytes never go into DynamoDB — the conversation
     # is one item and DynamoDB caps items at 400 KB. Set s3_endpoint_url to
-    # http://localhost:4566 for LocalStack; leave unset to hit real AWS.
+    # http://localhost:9000 for local MinIO; leave unset to hit real AWS.
     s3_endpoint_url: str | None = None
     s3_bucket_attachments: str = "agent-customer-support-attachments"
     s3_auto_create_bucket: bool = True

@@ -233,7 +233,6 @@ async def test_pending_verification_resumes_and_escalates_when_complete():
     saved = c.sessions.save.call_args.args[0]
     # verification is over; what remains pending is the one-shot contact ask
     assert saved.pending == "collect_contact"
-    assert "since_turn" not in (saved.pending_context or {})
 
 
 async def test_out_of_scope_route_refuses_before_knowledge():
@@ -398,10 +397,10 @@ _REPORT = {
 }
 
 
-def _verified_bug_coord(*, since_turn: int = 2):
-    """A conversation where the bug was suspected at turn index 2: a screenshot before
-    it (turn 0) is shown to the verifier but must NOT reach the ticket; the one sent
-    during verification (turn 4) must."""
+def _verified_bug_coord():
+    """A conversation where the bug was suspected at turn index 2, with one screenshot
+    before it (turn 0) and one during verification (turn 4). Both are shown to the
+    verifier, so both must reach the ticket."""
     c = _coord()
     c.conversations.load.return_value = Conversation(
         conversation_id="cv1",
@@ -421,7 +420,6 @@ def _verified_bug_coord(*, since_turn: int = 2):
         pending_context={
             "application": "Lấy mẫu - Quan trắc",
             "summary": "A lỗi",
-            "since_turn": since_turn,
         },
     )
     c.issue_verification.run = AsyncMock(
@@ -431,14 +429,13 @@ def _verified_bug_coord(*, since_turn: int = 2):
             evidence={
                 "application": "Lấy mẫu - Quan trắc",
                 "summary": "A lỗi",
-                "since_turn": since_turn,
                 "has_image": True,
                 "report": _REPORT,
             },
         )
     )
     c.escalation.run = AsyncMock(return_value=AgentResult(reply="chuyển nhân viên", escalated=True))
-    c.attachments.get_bytes = AsyncMock(return_value=b"k1-bytes")
+    c.attachments.get_bytes = AsyncMock(side_effect=lambda st: st.s3_key.encode())
     return c
 
 
@@ -459,16 +456,18 @@ async def test_verified_bug_files_ticket_with_evidence_then_logs_and_escalates()
     assert kw["customer_name"] == "C1"
     assert kw["application"] == "Lấy mẫu - Quan trắc"
     assert kw["transcript"].endswith("user: lỗi 500")
-    # prior screenshot from verification (read back from S3) first, current turn last;
-    # the unrelated one from before the bug was suspected is absent
+    # The same earlier screenshots the verifier read (from S3, oldest first), then the
+    # current turn. old.png was sent before the bug was suspected and still lands: the
+    # verifier read the error off it, so the ticket must carry it.
+    b64 = lambda raw: base64.b64encode(raw).decode()  # noqa: E731
     assert [(f.name, f.content_b64) for f in kw["files"]] == [
-        ("screenshot-1.jpg", "azEtYnl0ZXM="),
-        ("screenshot-2.png", "QUJD"),
+        ("screenshot-1.png", b64(b"old.png")),
+        ("screenshot-2.jpg", b64(b"k1.jpg")),
+        ("screenshot-3.png", "QUJD"),
     ]
-    # The verifier reads from the start of the conversation (old.png included); the
-    # ticket reads only from since_turn, so old.png is read once and never filed.
+    # Read once for the verifier and once for the ticket.
     keys = [c.args[0].s3_key for c in c.attachments.get_bytes.await_args_list]
-    assert sorted(keys) == ["k1.jpg", "k1.jpg", "old.png"]
+    assert sorted(keys) == ["k1.jpg", "k1.jpg", "old.png", "old.png"]
 
     bk = c.backlog.add.call_args.kwargs
     assert bk["type"] == "bug"
@@ -483,7 +482,6 @@ async def test_verified_bug_files_ticket_with_evidence_then_logs_and_escalates()
 
     saved = c.sessions.save.call_args.args[0]
     assert saved.pending == "collect_contact"
-    assert "since_turn" not in (saved.pending_context or {})
 
 
 async def test_verified_bug_without_ticket_still_logs_and_escalates():
@@ -540,8 +538,8 @@ async def test_evidence_read_failure_drops_that_file_only():
     assert [(f.name, f.content_b64) for f in files] == [("screenshot-1.png", "QUJD")]
 
 
-async def test_evidence_files_are_capped_to_the_most_recent():
-    c = _verified_bug_coord(since_turn=0)
+async def test_ticket_takes_the_same_newest_two_earlier_screenshots_as_the_verifier():
+    c = _verified_bug_coord()
     c.conversations.load.return_value = Conversation(
         conversation_id="cv1",
         customer_id="c1",
@@ -550,14 +548,25 @@ async def test_evidence_files_are_capped_to_the_most_recent():
             for i in range(7)
         ],
     )
-    c.attachments.get_bytes = AsyncMock(side_effect=lambda st: st.s3_key.encode())
     cur = Attachment(kind="image", media_type="image/png", data="QUJD")
     await c.handle_turn(customer_id="c1", conversation_id="cv1", message="lỗi", attachments=[cur])
+    shown = c.issue_verification.run.call_args.args[0].evidence_images
+    files = c.mantis.create_issue.call_args.kwargs["files"]
+    assert [f.content_b64 for f in files] == [*(a.data for a in shown), "QUJD"]
+    assert [base64.b64decode(a.data) for a in shown] == [b"k5.png", b"k6.png"]
+    # Older screenshots are never read from S3 at all.
+    keys = {c.args[0].s3_key for c in c.attachments.get_bytes.await_args_list}
+    assert keys == {"k5.png", "k6.png"}
+
+
+async def test_evidence_files_are_capped_to_mantis_max_files():
+    c = _verified_bug_coord()
+    cur = [Attachment(kind="image", media_type="image/png", data=f"Q{i}==") for i in range(6)]
+    await c.handle_turn(customer_id="c1", conversation_id="cv1", message="lỗi", attachments=cur)
     files = c.mantis.create_issue.call_args.kwargs["files"]
     assert len(files) == 5  # settings.mantis_max_files default
-    # most recent kept: k3..k6 from history, then the current turn
-    assert files[-1].content_b64 == "QUJD"
-    assert files[0].content_b64 == base64.b64encode(b"k3.png").decode()
+    # the most recent kept: the current turn's last five
+    assert [f.content_b64 for f in files] == [f"Q{i}==" for i in range(1, 6)]
 
 
 async def test_suspected_bug_records_where_verification_started():
@@ -581,8 +590,6 @@ async def test_suspected_bug_records_where_verification_started():
     await c.handle_turn(customer_id="c1", conversation_id="cv1", message="A bị lỗi", attachments=[])
     saved = c.sessions.save.call_args.args[0]
     assert saved.pending == "verify_issue"
-    # index the current (not yet persisted) user turn will get
-    assert saved.pending_context["since_turn"] == 2
     assert saved.pending_context["application"] == "Lấy mẫu - Quan trắc"
 
 
@@ -829,8 +836,6 @@ async def test_triage_bug_route_fills_pending_context_from_the_turn():
     saved = c.sessions.save.call_args.args[0]
     assert saved.pending_context["summary"] == "Import mẫu bị lỗi"
     assert saved.pending_context["application"] == "lay_mau_quan_trac"
-    # index the current (not yet persisted) user turn will get
-    assert saved.pending_context["since_turn"] == 2
 
 
 async def test_triage_bug_route_leaves_application_unset_when_ambiguous():
@@ -924,7 +929,7 @@ async def test_the_collection_cap_files_the_ticket_instead_of_asking_forever():
         conversation_id="cv1",
         pending="verify_issue",
         verify_turns=4,
-        pending_context={"summary": "A lỗi", "since_turn": 2},
+        pending_context={"summary": "A lỗi"},
     )
     res = await c.handle_turn(
         customer_id="c1", conversation_id="cv1", message="chưa biết nữa", attachments=[]
@@ -960,7 +965,7 @@ def _user_error_coord():
         return_value=AgentResult(
             reply="Chức năng này cần chọn mẫu trước khi bấm Lưu.",
             verify_outcome="user_error",
-            evidence={"summary": "không lưu được", "since_turn": 0},
+            evidence={"summary": "không lưu được"},
         )
     )
     c.knowledge.run = AsyncMock(
@@ -1083,7 +1088,7 @@ async def test_the_route_is_recorded_for_the_trace(monkeypatch):
 # ---- earlier screenshots are re-shown to the verifier ----
 
 
-def _resume_coord(turns, since_turn=0):
+def _resume_coord(turns):
     c = _coord()
     c.conversations.load.return_value = Conversation(
         conversation_id="cv1", customer_id="c1", turns=turns
@@ -1091,7 +1096,7 @@ def _resume_coord(turns, since_turn=0):
     c.sessions.get.return_value = SessionState(
         conversation_id="cv1",
         pending="verify_issue",
-        pending_context={"summary": "A lỗi", "since_turn": since_turn},
+        pending_context={"summary": "A lỗi"},
     )
     c.issue_verification.run = AsyncMock(
         return_value=AgentResult(reply="còn thiếu gì", verify_outcome="need_more_info")
@@ -1110,7 +1115,6 @@ async def test_earlier_screenshots_reach_the_verifier_newest_two_only():
             Turn(role="user", content="thêm ảnh", attachments=[_stored("c.png")]),
             Turn(role="assistant", content="còn gì?"),
         ],
-        since_turn=2,
     )
     await _turn(c)
     ctx = c.issue_verification.run.call_args.args[0]
@@ -1127,7 +1131,6 @@ async def test_a_screenshot_sent_before_the_bug_was_suspected_reaches_the_verifi
             Turn(role="user", content="vẫn lỗi"),
             Turn(role="assistant", content="menu nào?"),
         ],
-        since_turn=2,
     )
     await _turn(c)
     ctx = c.issue_verification.run.call_args.args[0]

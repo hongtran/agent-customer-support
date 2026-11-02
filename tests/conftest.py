@@ -4,13 +4,13 @@ import os
 os.environ.setdefault("PRODUCT_COLLECTION", "cenlab")
 os.environ.setdefault("ENVIRONMENT", "dev")
 os.environ.setdefault("AGENT_MODEL", "gpt-5.4-mini")
-os.environ.setdefault("DYNAMODB_ENDPOINT_URL", "http://localhost:8000")
-os.environ.setdefault("AWS_ACCESS_KEY_ID", "local")
-os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "local")
+os.environ.setdefault("DYNAMODB_ENDPOINT_URL", "http://localhost:8002")  # dynamodb-test, in memory
+os.environ.setdefault("AWS_ACCESS_KEY_ID", "minioadmin")
+os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "minioadmin")
 os.environ.setdefault("AWS_REGION", "ap-southeast-1")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
-os.environ.setdefault("S3_ENDPOINT_URL", "http://localhost:4566")  # LocalStack
-os.environ.setdefault("S3_BUCKET_ATTACHMENTS", "agent-customer-support-attachments")
+os.environ.setdefault("S3_ENDPOINT_URL", "http://localhost:9000")  # MinIO
+os.environ.setdefault("S3_BUCKET_ATTACHMENTS", "acs-test-attachments")  # not the dev bucket
 os.environ.setdefault("QDRANT_ENDPOINT", "http://localhost:6333")
 os.environ.setdefault("QDRANT_API_KEY", "local")
 os.environ.setdefault("GOOGLE_API_KEY", "fake-google-for-tests")
