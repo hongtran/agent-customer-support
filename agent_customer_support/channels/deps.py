@@ -5,6 +5,7 @@ from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from agent_customer_support.auth import decode_access_token
+from agent_customer_support.mantis import MantisClient
 from agent_customer_support.models import CustomerProfile
 from agent_customer_support.rag.qa_indexer import QAIndexer
 from agent_customer_support.stores.attachment_store import AttachmentStore
@@ -60,6 +61,11 @@ def get_doc_image_store() -> DocImageStore:
 @lru_cache
 def get_request_backlog() -> RequestBacklog:
     return RequestBacklog()
+
+
+@lru_cache
+def get_mantis_client() -> MantisClient:
+    return MantisClient()
 
 
 # auto_error=False so a missing header reaches our own handler and returns the same

@@ -104,6 +104,12 @@ export default function ConfigBar({
           >
             Sự cố đã báo
           </Link>
+          <Link
+            href="/requests"
+            className="rounded bg-gray-200 px-3 py-1 text-xs text-gray-700 hover:bg-gray-300"
+          >
+            Yêu cầu tính năng
+          </Link>
           {me.role === "admin" && (
             <Link
               href="/admin"

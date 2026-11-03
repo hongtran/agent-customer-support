@@ -9,12 +9,12 @@ async def test_add_request():
     await rb.init()
     rec = await rb.add(
         customer_id="c1",
-        type="feature",
+        type="new_feature",
         summary="thêm cột",
         application="Kinh doanh",
         transcript="...",
     )
-    assert rec.id and rec.type == "feature"
+    assert rec.id and rec.type == "new_feature"
     got = await rb.get(rec.id)
     assert got and got.summary == "thêm cột" and got.application == "Kinh doanh"
     # a row written before tickets existed has no title and no ticket
@@ -258,3 +258,83 @@ async def test_row_without_history_attribute_appends():
         )
     got = await rb.update_issue(f"old-{me}", me, by="cs", status="completed")
     assert got is not None and [h.status for h in got.status_history] == ["completed"]
+
+
+# ---- feature requests ----
+
+
+async def test_list_by_type_returns_only_that_type():
+    rb = RequestBacklog()
+    await rb.init()
+    me = _cid()
+    await rb.add(customer_id=me, type="bug", summary="lỗi")
+    feat = await rb.add(customer_id=me, type="new_feature", summary="thêm cột", title="Cột mới")
+    items = await rb.list_by_type(me, "new_feature")
+    assert [i["id"] for i in items] == [feat.id]
+    assert items[0]["title"] == "Cột mới" and items[0]["status"] == "pending"
+    # list_bugs is unaffected by the new type
+    assert feat.id not in [i.id for i in await rb.list_bugs(me)]
+
+
+async def test_update_checks_the_type_both_ways():
+    rb = RequestBacklog()
+    await rb.init()
+    me = _cid()
+    bug = await rb.add(customer_id=me, type="bug", summary="lỗi")
+    feat = await rb.add(customer_id=me, type="new_feature", summary="thêm cột")
+    # a feature id on the bug path, and a bug id on the feature path, are both refused
+    assert await rb.update_issue(feat.id, me, by="admin", status="completed") is None
+    assert (
+        await rb.update_issue(bug.id, me, by="admin", type="new_feature", status="processing")
+        is None
+    )
+    updated = await rb.update_issue(feat.id, me, by="admin", type="new_feature", status="responded")
+    assert updated is not None and updated.status == "responded"
+    # "Đã phản hồi" still waits for the customer: not closed
+    assert updated.resolved_at is None
+    assert [h.status for h in updated.status_history] == ["responded"]
+
+
+async def test_updated_feature_is_resolved():
+    rb = RequestBacklog()
+    await rb.init()
+    me = _cid()
+    feat = await rb.add(customer_id=me, type="new_feature", summary="thêm cột")
+    updated = await rb.update_issue(feat.id, me, by="admin", type="new_feature", status="updated")
+    assert updated is not None and updated.resolved_at is not None
+
+
+async def test_feature_row_with_requester_and_files_round_trips():
+    from agent_customer_support.models import RequestFile, Requester
+
+    rb = RequestBacklog()
+    await rb.init()
+    me = _cid()
+    f = RequestFile(name="mẫu.xlsx", media_type="x", s3_key="requests/r/0-m_u.xlsx", size_bytes=5)
+    rec = await rb.add(
+        id="fixed-" + me,
+        customer_id=me,
+        type="new_feature",
+        status="received",
+        summary="thêm cột",
+        requester=Requester(name="A", position="TP", department="Thí nghiệm"),
+        reason="cần gấp",
+        files=[f],
+    )
+    assert rec.id == "fixed-" + me
+    got = await rb.get(rec.id)
+    assert got is not None and got.status == "received"
+    assert got.requester is not None and got.requester.department == "Thí nghiệm"
+    assert got.reason == "cần gấp" and got.files == [f]
+
+
+async def test_category_is_set_and_cleared():
+    rb = RequestBacklog()
+    await rb.init()
+    me = _cid()
+    feat = await rb.add(customer_id=me, type="new_feature", summary="thêm cột")
+    up = await rb.update_issue(feat.id, me, by="admin", type="new_feature", category="upgrade")
+    assert up is not None and up.category == "upgrade"
+    assert up.status_history == []  # not a status change
+    up = await rb.update_issue(feat.id, me, by="admin", type="new_feature", category=None)
+    assert up is not None and up.category is None

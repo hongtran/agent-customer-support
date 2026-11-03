@@ -85,3 +85,21 @@ async def test_get_bytes_returns_what_put_stored():
     raw = os.urandom(3000)
     stored = await st.put(f"conv-{uuid.uuid4()}", "turn-1", 0, _attachment(raw))
     assert await st.get_bytes(stored) == raw
+
+
+async def test_request_file_downloads_with_its_original_name():
+    st = AttachmentStore()
+    await st.init()
+    raw = os.urandom(1024)
+    rid = f"req-{uuid.uuid4()}"
+    f = await st.put_request_file(rid, 0, "Báo cáo tháng 1.xlsx", "application/x", raw)
+
+    # the key is ASCII-safe; the real name stays on the record
+    assert f.s3_key == f"requests/{rid}/0-B_o_c_o_th_ng_1.xlsx"
+    assert f.name == "Báo cáo tháng 1.xlsx" and f.size_bytes == len(raw)
+
+    ref = await st.presign_request_file(f)
+    async with httpx.AsyncClient() as c:
+        resp = await c.get(ref.url)
+    assert resp.status_code == 200 and resp.content == raw
+    assert "B%C3%A1o%20c%C3%A1o" in resp.headers["content-disposition"]

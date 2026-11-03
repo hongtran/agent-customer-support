@@ -26,6 +26,7 @@ from agent_customer_support.models import (
     IssueStatus,
     IssueSummary,
     RequestRecord,
+    RequestType,
 )
 from agent_customer_support.stores.customer_registry import CustomerRegistry
 from agent_customer_support.stores.doc_image_store import DocImageStore
@@ -49,13 +50,32 @@ class IssuePatch(BaseModel):
     due_date: date | None = None
 
 
-async def _load_bug(backlog: RequestBacklog, issue_id: str, customer_id: str) -> RequestRecord:
-    """The bug row, or 404 when it is missing, not a bug, or another customer's. One
-    answer for all three, so an id outside the caller's tenant is not confirmed to exist."""
-    rec = await backlog.get(issue_id)
-    if rec is None or rec.type != "bug" or rec.customer_id != customer_id:
-        raise HTTPException(status_code=404, detail="issue not found")
+async def load_request(
+    backlog: RequestBacklog, request_id: str, customer_id: str, type: RequestType
+) -> RequestRecord:
+    """The row, or 404 when it is missing, of another type, or another customer's. One
+    answer for all three, so an id outside the caller's tenant is not confirmed to exist.
+    Shared with `channels/feature_requests.py`."""
+    rec = await backlog.get(request_id)
+    if rec is None or rec.type != type or rec.customer_id != customer_id:
+        raise HTTPException(status_code=404, detail="not found")
     return rec
+
+
+def patch_changes(body: BaseModel) -> dict[str, Any]:
+    """The fields an admin PATCH actually sent. A field left out is not in the dict; an
+    explicit null is (it clears). A null status means "leave it" and is dropped. Nothing
+    left is a 422. Shared with `channels/feature_requests.py`."""
+    changes: dict[str, Any] = {f: getattr(body, f) for f in body.model_fields_set}
+    if "status" in changes and changes["status"] is None:
+        del changes["status"]
+    if not changes:
+        raise HTTPException(status_code=422, detail="nothing to update")
+    return changes
+
+
+async def _load_bug(backlog: RequestBacklog, issue_id: str, customer_id: str) -> RequestRecord:
+    return await load_request(backlog, issue_id, customer_id, "bug")
 
 
 async def _detail(rec: RequestRecord, doc_images: DocImageStore) -> IssueDetail:
@@ -125,11 +145,7 @@ async def update_issue(
 ) -> IssueDetail:
     """Set the status, note or due date the customer sees. A status change is recorded
     in the row's history. Nothing else happens: no mail, no MantisBT note."""
-    changes: dict[str, Any] = {f: getattr(body, f) for f in body.model_fields_set}
-    if "status" in changes and changes["status"] is None:
-        del changes["status"]
-    if not changes:
-        raise HTTPException(status_code=422, detail="nothing to update")
+    changes = patch_changes(body)
     rec = await backlog.update_issue(issue_id, customer_id, by=admin.customer_id, **changes)
     if rec is None:
         raise HTTPException(status_code=404, detail="issue not found")
