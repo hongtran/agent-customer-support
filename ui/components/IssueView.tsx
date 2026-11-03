@@ -1,10 +1,49 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ISSUE_STATUSES, IssueDetail, IssuePatch, IssueStatus, IssueSummary } from "@/lib/api";
+import {
+  FEATURE_CATEGORIES,
+  FeatureCategory,
+  RequestDetail,
+  RequestPatch,
+  RequestStatus,
+  RequestSummary,
+} from "@/lib/api";
 import { parseTranscript } from "@/lib/transcript";
 import MessageList from "@/components/MessageList";
-import IssueStatusBadge, { ISSUE_STATUS_LABEL } from "@/components/IssueStatusBadge";
+import IssueStatusBadge, {
+  FEATURE_CATEGORY_LABEL,
+  RequestKind,
+  STATUS_OPTIONS,
+} from "@/components/IssueStatusBadge";
+
+/** The words that differ between the bug list and the feature-request list. */
+const NOUN: Record<
+  RequestKind,
+  { list: string; one: string; createdAt: string; note: string; notePlaceholder: string }
+> = {
+  bug: {
+    list: "Sự cố",
+    one: "sự cố",
+    createdAt: "Báo lúc",
+    note: "Ghi chú từ CS",
+    notePlaceholder: "Ghi chú cho khách hàng (không bắt buộc)…",
+  },
+  feature: {
+    list: "Yêu cầu",
+    one: "yêu cầu",
+    createdAt: "Gửi lúc",
+    // A feature request's `note` is CS's answer to it.
+    note: "Giải pháp",
+    notePlaceholder: "Giải pháp đề xuất cho khách hàng…",
+  },
+};
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
 
 function formatTime(iso: string | null): string {
   if (!iso) return "";
@@ -28,17 +67,23 @@ function formatDay(day: string): string {
  */
 function IssueEditor({
   detail,
+  kind,
   onSave,
 }: {
-  detail: IssueDetail;
-  onSave: (patch: IssuePatch) => Promise<void>;
+  detail: RequestDetail;
+  kind: RequestKind;
+  onSave: (patch: RequestPatch) => Promise<void>;
 }) {
-  const [status, setStatus] = useState<IssueStatus>(detail.status);
+  const [status, setStatus] = useState<RequestStatus>(detail.status);
   const [dueDate, setDueDate] = useState(detail.due_date ?? "");
   const [note, setNote] = useState(detail.note ?? "");
+  const [category, setCategory] = useState<FeatureCategory | "">(detail.category ?? "");
   const [saving, setSaving] = useState(false);
 
-  const patch: IssuePatch = {};
+  const patch: RequestPatch = {};
+  if (kind === "feature" && category !== (detail.category ?? "")) {
+    patch.category = category || null;
+  }
   if (status !== detail.status) patch.status = status;
   if (dueDate !== (detail.due_date ?? "")) patch.due_date = dueDate || null;
   if (note.trim() !== (detail.note ?? "")) patch.note = note.trim() || null;
@@ -60,12 +105,12 @@ function IssueEditor({
           Trạng thái
           <select
             value={status}
-            onChange={(e) => setStatus(e.target.value as IssueStatus)}
+            onChange={(e) => setStatus(e.target.value as RequestStatus)}
             className="rounded border border-gray-300 bg-white px-2 py-1"
           >
-            {ISSUE_STATUSES.map((s) => (
+            {STATUS_OPTIONS[kind].statuses.map((s) => (
               <option key={s} value={s}>
-                {ISSUE_STATUS_LABEL[s]}
+                {STATUS_OPTIONS[kind].label[s]}
               </option>
             ))}
           </select>
@@ -79,13 +124,31 @@ function IssueEditor({
             className="rounded border border-gray-300 bg-white px-2 py-1"
           />
         </label>
+        {kind === "feature" && (
+          <label className="flex items-center gap-1">
+            Thuộc hạng mục
+            <select
+              value={category}
+              onChange={(e) => setCategory(e.target.value as FeatureCategory | "")}
+              className="rounded border border-gray-300 bg-white px-2 py-1"
+            >
+              <option value="">— Chưa chọn —</option>
+              {FEATURE_CATEGORIES.map((c) => (
+                <option key={c} value={c}>
+                  {FEATURE_CATEGORY_LABEL[c]}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
       </div>
+      {kind === "feature" && <p className="text-xs text-gray-600">{NOUN.feature.note}</p>}
       <textarea
         value={note}
         onChange={(e) => setNote(e.target.value)}
         maxLength={2000}
         rows={3}
-        placeholder="Ghi chú cho khách hàng (không bắt buộc)…"
+        placeholder={NOUN[kind].notePlaceholder}
         className="w-full rounded border border-gray-300 bg-white px-2 py-1 text-sm"
       />
       <div className="flex justify-end">
@@ -101,33 +164,44 @@ function IssueEditor({
   );
 }
 
+// Method syntax on purpose: it lets a caller pass functions typed with the narrower
+// bug or feature types (e.g. `(patch: IssuePatch) => …`).
 interface Props {
-  /** Loads the whole list, newest first. Called on mount and on Refresh. */
-  loadList: () => Promise<IssueSummary[]>;
-  loadDetail: (id: string) => Promise<IssueDetail>;
-  /** Given only to admins: shows the edit form (status, due date, note) on the open issue. */
-  onUpdate?: (id: string, patch: IssuePatch) => Promise<IssueDetail>;
+  /** Bugs ("Sự cố") or feature requests ("Yêu cầu"): picks the statuses and wording. */
+  kind?: RequestKind;
+  /** Loads the whole list, newest first. Called on mount, on Refresh and when it changes identity. */
+  loadList(): Promise<RequestSummary[]>;
+  loadDetail(id: string): Promise<RequestDetail>;
+  /** Given only to admins: shows the edit form (status, due date, note) on the open item. */
+  onUpdate?(id: string, patch: RequestPatch): Promise<RequestDetail>;
   /** Reports the list after every load or status change, e.g. for a tab counter. */
-  onItemsChange?: (items: IssueSummary[]) => void;
+  onItemsChange?(items: RequestSummary[]): void;
   emptyText: string;
+  /** Opens this item once the list has loaded, e.g. one the user just created. */
+  openId?: string | null;
 }
 
 /**
- * Issue list on the left, the open issue on the right. Shared by the customer's own
- * page and the admin's per-customer tab; only `onUpdate` differs between them.
+ * List on the left, the open item on the right. Shared by bugs and feature requests,
+ * and by the customer's own pages and the admin's per-customer tabs; only `onUpdate`
+ * differs between customer and admin.
  */
 export default function IssueView({
+  kind = "bug",
   loadList,
   loadDetail,
   onUpdate,
   onItemsChange,
   emptyText,
+  openId,
 }: Props) {
-  const [items, setItems] = useState<IssueSummary[]>([]);
-  const [filter, setFilter] = useState<IssueStatus | "all">("all");
+  const noun = NOUN[kind];
+  const options = STATUS_OPTIONS[kind];
+  const [items, setItems] = useState<RequestSummary[]>([]);
+  const [filter, setFilter] = useState<RequestStatus | "all">("all");
   const [listLoading, setListLoading] = useState(false);
   const [selId, setSelId] = useState<string | null>(null);
-  const [detail, setDetail] = useState<IssueDetail | null>(null);
+  const [detail, setDetail] = useState<RequestDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState("");
   // The issue most recently clicked. A response for any other id is stale — the user
@@ -139,7 +213,12 @@ export default function IssueView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadList]);
 
-  function publish(next: IssueSummary[]) {
+  useEffect(() => {
+    if (openId) open(openId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openId]);
+
+  function publish(next: RequestSummary[]) {
     setItems(next);
     onItemsChange?.(next);
   }
@@ -172,7 +251,7 @@ export default function IssueView({
     }
   }
 
-  async function save(patch: IssuePatch) {
+  async function save(patch: RequestPatch) {
     if (!onUpdate || !detail) return;
     try {
       setError("");
@@ -207,7 +286,7 @@ export default function IssueView({
         <aside className="flex w-96 flex-col border-r border-gray-200">
           <div className="flex items-center justify-between border-b border-gray-100 px-4 py-2">
             <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">
-              Sự cố ({shown.length})
+              {noun.list} ({shown.length})
             </span>
             <button
               onClick={reload}
@@ -221,9 +300,9 @@ export default function IssueView({
             <button onClick={() => setFilter("all")} className={chip(filter === "all")}>
               Tất cả
             </button>
-            {ISSUE_STATUSES.map((s) => (
+            {options.statuses.map((s) => (
               <button key={s} onClick={() => setFilter(s)} className={chip(filter === s)}>
-                {ISSUE_STATUS_LABEL[s]}
+                {options.label[s]}
               </button>
             ))}
           </div>
@@ -245,7 +324,7 @@ export default function IssueView({
                   >
                     <div className="flex items-start justify-between gap-2">
                       <p className="line-clamp-2 text-sm text-gray-700">{i.title || i.summary}</p>
-                      <IssueStatusBadge status={i.status} />
+                      <IssueStatusBadge status={i.status} kind={kind} />
                     </div>
                     <p className="mt-1 text-[11px] text-gray-400">
                       {formatTime(i.created_at)}
@@ -264,16 +343,49 @@ export default function IssueView({
               <div className="space-y-2 border-b border-gray-100 px-4 py-3">
                 <div className="flex flex-wrap items-center gap-3">
                   <h2 className="text-base font-semibold text-gray-900">
-                    {detail.title || "Sự cố"}
+                    {detail.title || noun.list}
                   </h2>
-                  <IssueStatusBadge status={detail.status} />
+                  <IssueStatusBadge status={detail.status} kind={kind} />
                 </div>
+                {detail.requester && (
+                  <p className="text-xs text-gray-600">
+                    Người yêu cầu: <b>{detail.requester.name}</b> · {detail.requester.position} ·{" "}
+                    {detail.requester.department}
+                  </p>
+                )}
                 <p className="whitespace-pre-wrap text-sm text-gray-700">{detail.summary}</p>
+                {detail.reason && (
+                  <p className="whitespace-pre-wrap text-sm text-gray-600">
+                    <span className="font-medium">Lý do:</span> {detail.reason}
+                  </p>
+                )}
+                {detail.files && detail.files.length > 0 && (
+                  <ul className="flex flex-wrap gap-2">
+                    {detail.files.map((f) => (
+                      <li key={f.url}>
+                        <a
+                          href={f.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-block rounded border border-gray-200 bg-gray-50 px-2 py-1 text-xs text-blue-600 hover:bg-gray-100"
+                        >
+                          📎 {f.name} ({formatSize(f.size_bytes)})
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {!onUpdate && detail.category && (
+                  <p className="text-xs text-gray-600">
+                    Thuộc hạng mục: <b>{FEATURE_CATEGORY_LABEL[detail.category]}</b>
+                  </p>
+                )}
                 {onUpdate ? (
                   <IssueEditor
                     // Remount after a save so the drafts restart from the saved values.
-                    key={`${detail.id}|${detail.status}|${detail.due_date}|${detail.note}`}
+                    key={`${detail.id}|${detail.status}|${detail.due_date}|${detail.note}|${detail.category}`}
                     detail={detail}
+                    kind={kind}
                     onSave={save}
                   />
                 ) : (
@@ -286,7 +398,7 @@ export default function IssueView({
                     {detail.note && (
                       <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2">
                         <p className="text-[11px] font-semibold uppercase tracking-wide text-blue-700">
-                          Ghi chú từ CS
+                          {noun.note}
                         </p>
                         <p className="mt-1 whitespace-pre-wrap text-sm text-gray-800">{detail.note}</p>
                       </div>
@@ -294,7 +406,9 @@ export default function IssueView({
                   </>
                 )}
                 <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-gray-400">
-                  <span>Báo lúc {formatTime(detail.created_at)}</span>
+                  <span>
+                    {noun.createdAt} {formatTime(detail.created_at)}
+                  </span>
                   {detail.status_updated_at && (
                     <span>Cập nhật {formatTime(detail.status_updated_at)}</span>
                   )}
@@ -315,17 +429,19 @@ export default function IssueView({
                     ))}
                 </div>
               </div>
-              {detail.transcript.trim() ? (
-                <MessageList messages={parseTranscript(detail.transcript)} loading={false} />
-              ) : (
-                <div className="flex flex-1 items-center justify-center text-sm text-gray-400">
-                  Không có nội dung hội thoại.
-                </div>
-              )}
+              {/* A feature request was written in a form: it has no conversation at all. */}
+              {kind === "bug" &&
+                (detail.transcript?.trim() ? (
+                  <MessageList messages={parseTranscript(detail.transcript)} loading={false} />
+                ) : (
+                  <div className="flex flex-1 items-center justify-center text-sm text-gray-400">
+                    Không có nội dung hội thoại.
+                  </div>
+                ))}
             </>
           ) : (
             <div className="flex flex-1 items-center justify-center text-sm text-gray-400">
-              {detailLoading ? "Đang tải…" : "Chọn một sự cố để xem chi tiết."}
+              {detailLoading ? "Đang tải…" : `Chọn một ${noun.one} để xem chi tiết.`}
             </div>
           )}
         </section>

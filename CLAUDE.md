@@ -323,6 +323,51 @@ it stood when the ticket was filed, not the live conversation (the row has no
 (`image_urls.resolve_doc_images`); the UI splits it back into bubbles on the
 `user:` / `assistant:` prefixes (`ui/lib/transcript.ts`).
 
+### Feature requests
+
+A customer asks for a new feature from a form, not the chat: `POST /widget/me/feature-requests`
+(`channels/feature_requests.py`). No LLM call. The form is CS's own list: **requester**
+(`Tên nhân sự`, `Chức vụ`, `Phòng ban` — all required, because the login is shared by the
+whole company and this is the only way CS knows whom to call back), `title`, `application`,
+`summary` ("Nội dung yêu cầu"), optional `reason`, and up to 5 files. The customer comes
+from the token; `application` must be one of `enabled_applications` (422 otherwise). The row
+is a `RequestRecord` with `type == "new_feature"`, starting `received`.
+
+**Files** are Excel, Word or png/jpg only — the extension *and* the media type must match
+`_ALLOWED_FILES` (the UI derives the media type from the extension, since browsers report
+Office files inconsistently) — each ≤ `max_attachment_bytes` (413), base64 in the JSON body
+like chat attachments. The row id is generated first and the files go to S3 under
+`requests/<id>/` **before** anything else; a failed upload is a 502 with nothing saved, since
+the customer can simply retry. The row keeps `RequestFile` keys only (the 400 KB item rule);
+the detail endpoints presign them with `ResponseContentDisposition`, so a download keeps its
+original (Vietnamese) name while the S3 key is ASCII-safe.
+
+**MantisBT goes next, then one `put_item` carrying the ticket id**; a tracker failure still
+saves the row with `mantis_issue_id = None`. `create_feature_request` writes the title as
+`[FEATURE][<customer name>] …`, `severity: feature`, the content as `description`, and puts
+the requester **first** in `additional_information`, then customer, application, reason. The
+files go in a **note** (`POST /issues/{id}/notes` with `files`) as a second call — so a
+rejected upload costs the files on the ticket, not the ticket; they stay in S3 and on our
+admin page. The bug path still attaches through `/issues/{id}/files`. Nobody is paged on create.
+
+CS answers with status, **"Giải pháp"** (stored in the same `note` attribute bugs use, so the
+status history keeps it per change), due date and **category** (`modify | upgrade |
+extend_other_app` = sửa đổi / nâng cấp / mở rộng ứng dụng khác). Statuses are their own set,
+`FeatureStatus = received | processing | responded | updated | awaiting_agreement` (Đã tiếp
+nhận, Đang xử lý, Đã phản hồi, Đã cập nhật, Chờ thống nhất). **Only `updated` closes a
+request** (sets `resolved_at`); `responded` and `awaiting_agreement` still wait on the
+customer. A list row that does not validate is skipped and logged, not a 500. `RequestRecord.status` holds
+`RequestStatus`, the union of both sets; **which subset a row may take is enforced only by the
+patch model of its route** (`IssuePatch` / `FeaturePatch`).
+
+Everything else is the bug machinery with a `type` argument: `RequestBacklog.list_by_type`
+(same GSI — no index change, which is also why `category`, `requester` and `files` are on the
+detail only, not on list rows) and `update_issue(type=…, category=…)`, whose condition checks
+the type, so a bug id on the feature route (or the reverse) is a 404. The admin side is the
+"Yêu cầu tính năng" tab next to "Sự cố" (`/admin/customers/{id}/feature-requests`); the UI
+reuses `IssueView` with `kind="feature"`, which hides the transcript and shows the requester,
+reason, files, the category select and the "Giải pháp" box.
+
 ### Contact follow-up
 
 The customer account is shared by a whole company, so after a handoff CS still needs to
@@ -369,7 +414,7 @@ added as CC on top of `CS_MAIL_CC`; `CS_MAIL_TO` still gets every mail.
 | `ConversationStore` | DynamoDB | Full message history |
 | `CustomerRegistry` | DynamoDB | Customer profiles & enabled modules |
 | `FlowStore` | DynamoDB | Flow definitions (seeded via `scripts/import_flows.py`) |
-| `RequestBacklog` | DynamoDB | Bug/feature/how-to records logged on escalation; bug rows are the customer-visible issues (status, by-customer GSI) |
+| `RequestBacklog` | DynamoDB | Bug/how-to records logged on escalation and customer feature requests (`new_feature`); bug and feature rows are customer-visible (status, by-customer GSI) |
 | `AttachmentStore` | S3 | Uploaded screenshot bytes; the turn keeps only the key |
 | `UsageStore` | DynamoDB | Per-customer daily question counter (rate limit) |
 | `FeedbackStore` | DynamoDB | Like/dislike per assistant message, keyed `message_id` (latest vote wins, clear deletes) |

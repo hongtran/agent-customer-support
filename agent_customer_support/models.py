@@ -254,14 +254,64 @@ class ConversationSummary(BaseModel):
 # CS looked and the software behaves as intended.
 IssueStatus = Literal["pending", "processing", "completed", "no_issue"]
 
-# The statuses that close an issue; reaching one sets `RequestRecord.resolved_at`.
-RESOLVED_STATUSES: frozenset[str] = frozenset({"completed", "no_issue"})
+# Where a customer's feature request stands, in CS's own words: Đã tiếp nhận, Đang xử
+# lý, Đã phản hồi, Đã cập nhật (delivered — the only closing one), Chờ thống nhất
+# (waiting for the customer to agree on the solution).
+FeatureStatus = Literal["received", "processing", "responded", "updated", "awaiting_agreement"]
+
+# Every value a row's `status` can hold. Which subset a row may take is decided by the
+# API's patch model for its type (`IssuePatch` / `FeaturePatch`), not here.
+RequestStatus = Literal[
+    "pending",
+    "processing",
+    "completed",
+    "no_issue",
+    "received",
+    "responded",
+    "updated",
+    "awaiting_agreement",
+]
+
+# The statuses that close a request; reaching one sets `RequestRecord.resolved_at`.
+RESOLVED_STATUSES: frozenset[str] = frozenset({"completed", "no_issue", "updated"})
+
+# What kind of change a feature request is, set by CS: sửa đổi, nâng cấp, mở rộng ứng
+# dụng khác.
+FeatureCategory = Literal["modify", "upgrade", "extend_other_app"]
+
+
+class Requester(BaseModel):
+    """Who in the customer's company asked. The login is shared by the whole company,
+    so this is the only way CS knows whom to contact."""
+
+    name: str
+    position: str
+    department: str
+
+
+class RequestFile(BaseModel):
+    """A file attached to a feature request. Bytes live in S3, only the key here — the
+    same rule as `StoredAttachment`, for the same 400 KB item limit."""
+
+    name: str
+    media_type: str
+    s3_key: str
+    size_bytes: int
+
+
+class FileRef(BaseModel):
+    """A `RequestFile` as returned to the UI: a presigned download URL, no key."""
+
+    name: str
+    media_type: str
+    size_bytes: int
+    url: str
 
 
 class StatusChange(BaseModel):
     """One admin status change, appended to `RequestRecord.status_history`."""
 
-    status: IssueStatus
+    status: RequestStatus
     at: datetime
     by: str  # the admin's customer_id
     # The note sent in the same save, if any. Kept per entry so the history still says
@@ -269,13 +319,18 @@ class StatusChange(BaseModel):
     note: str | None = None
 
 
+# "new_feature" rows are created by the customer from a form
+# (`channels/feature_requests.py`); "bug" and "how_to_missing" rows by the agent.
+RequestType = Literal["new_feature", "bug", "how_to_missing"]
+
+
 class RequestRecord(BaseModel):
     id: str
     customer_id: str
-    type: Literal["feature", "bug", "how_to_missing"]
+    type: RequestType
     summary: str
-    # Ticket title as filed in MantisBT. Only a verified bug has one; rows written
-    # before tickets existed, and the other request types, leave it None.
+    # Ticket title as filed in MantisBT. A verified bug and a feature request have one;
+    # rows written before tickets existed, and how-to rows, leave it None.
     title: str | None = None
     application: str | None = None
     transcript: str = ""
@@ -288,7 +343,7 @@ class RequestRecord(BaseModel):
     created_at: datetime = Field(default_factory=_now)
     # Set by an admin (RequestBacklog.set_status). Rows written before the field
     # existed have no attribute and read as "pending".
-    status: IssueStatus = "pending"
+    status: RequestStatus = "pending"
     status_updated_at: datetime | None = None
     status_updated_by: str | None = None
     # CS's current note to the customer, and the date CS expects the fix.
@@ -301,6 +356,11 @@ class RequestRecord(BaseModel):
     # Every status change, oldest first. Appended server-side, never rewritten. Rows
     # filed before it existed have none; their start is `created_at`.
     status_history: list[StatusChange] = Field(default_factory=list)
+    # Feature requests only (written by the customer's form / set by CS).
+    requester: Requester | None = None
+    reason: str | None = None
+    category: FeatureCategory | None = None
+    files: list[RequestFile] = Field(default_factory=list)
 
 
 class IssueSummary(BaseModel):
@@ -328,6 +388,38 @@ class IssueDetail(IssueSummary):
     status_history: list[StatusChange] = Field(default_factory=list)
     # The transcript frozen on the row when the ticket was filed, image markers resolved.
     transcript: str = ""
+
+
+class FeatureSummary(BaseModel):
+    """One row of a feature-request list. Same fields as `IssueSummary`, but with the
+    feature statuses."""
+
+    id: str
+    customer_id: str
+    title: str | None = None
+    summary: str
+    application: str | None = None
+    status: FeatureStatus = "received"
+    created_at: datetime
+    status_updated_at: datetime | None = None
+    mantis_issue_id: int | None = None
+    mantis_issue_url: str | None = None
+
+
+class FeatureDetail(FeatureSummary):
+    """A feature request as opened. No transcript: it was written in a form, not a chat.
+    `category` is here and not on the summary because the list is read from the GSI,
+    whose projection does not include it."""
+
+    requester: Requester | None = None
+    reason: str | None = None
+    category: FeatureCategory | None = None
+    files: list[FileRef] = Field(default_factory=list)
+    # Shown as "Giải pháp" (CS's answer) for a feature request.
+    note: str | None = None
+    due_date: date | None = None
+    resolved_at: datetime | None = None
+    status_history: list[StatusChange] = Field(default_factory=list)
 
 
 # ---- Q&A learning loop ----

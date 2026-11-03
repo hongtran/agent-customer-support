@@ -411,7 +411,7 @@ export interface IssueDetail extends IssueSummary {
 }
 
 export interface StatusChange {
-  status: IssueStatus;
+  status: RequestStatus;
   at: string;
   by: string;
   note: string | null;
@@ -464,5 +464,180 @@ export async function updateIssue(
     body: JSON.stringify(patch),
   });
   if (!r.ok) throw new Error(`update issue failed: ${r.status}`);
+  return r.json();
+}
+
+/* ------------------------------------------------------------- feature requests */
+
+/**
+ * Where a customer's feature request stands. Set by CS; every new request starts
+ * "received". Only "updated" (delivered) closes it.
+ */
+export type FeatureStatus =
+  | "received"
+  | "processing"
+  | "responded"
+  | "updated"
+  | "awaiting_agreement";
+
+export const FEATURE_STATUSES: FeatureStatus[] = [
+  "received",
+  "processing",
+  "responded",
+  "updated",
+  "awaiting_agreement",
+];
+
+/** What kind of change it is, set by CS: sửa đổi / nâng cấp / mở rộng ứng dụng khác. */
+export type FeatureCategory = "modify" | "upgrade" | "extend_other_app";
+
+export const FEATURE_CATEGORIES: FeatureCategory[] = ["modify", "upgrade", "extend_other_app"];
+
+/** The person in the customer's company who asked (the login is shared). */
+export interface Requester {
+  name: string;
+  position: string;
+  department: string;
+}
+
+/** An attached file; `url` is a presigned download link that expires. */
+export interface FileRef {
+  name: string;
+  media_type: string;
+  size_bytes: number;
+  url: string;
+}
+
+/** Any status a backlog row can hold — bugs and feature requests together. */
+export type RequestStatus = IssueStatus | FeatureStatus;
+
+/**
+ * The shape shared by bugs and feature requests, used by `IssueView`, which shows both.
+ * `IssueSummary` / `FeatureSummary` are this with a narrower `status`.
+ */
+export interface RequestSummary extends Omit<IssueSummary, "status"> {
+  status: RequestStatus;
+}
+
+export interface RequestDetail extends RequestSummary {
+  note: string | null;
+  due_date: string | null;
+  resolved_at: string | null;
+  status_history: StatusChange[];
+  /** Only bugs have one (the chat the ticket came from); a feature request has none. */
+  transcript?: string;
+  /** Feature requests only. */
+  requester?: Requester | null;
+  reason?: string | null;
+  category?: FeatureCategory | null;
+  files?: FileRef[];
+}
+
+export interface RequestPatch {
+  status?: RequestStatus;
+  note?: string | null;
+  due_date?: string | null;
+  category?: FeatureCategory | null;
+}
+
+export interface FeatureSummary extends Omit<IssueSummary, "status"> {
+  status: FeatureStatus;
+}
+
+export interface FeatureDetail extends FeatureSummary {
+  requester: Requester | null;
+  reason: string | null;
+  category: FeatureCategory | null;
+  files: FileRef[];
+  /** CS's solution ("Giải pháp"). */
+  note: string | null;
+  due_date: string | null;
+  /** When the request reached "updated"; null while open. */
+  resolved_at: string | null;
+  status_history: StatusChange[];
+}
+
+export interface FeaturePatch {
+  status?: FeatureStatus;
+  note?: string | null;
+  due_date?: string | null;
+  category?: FeatureCategory | null;
+}
+
+/** One file of the form, base64-encoded in the browser. */
+export interface FeatureUpload {
+  name: string;
+  media_type: string;
+  data: string;
+}
+
+/** The customer's form. `application` must be one of their enabled applications. */
+export interface FeatureCreate {
+  title: string;
+  requester_name: string;
+  requester_position: string;
+  requester_department: string;
+  application: string;
+  /** "Nội dung yêu cầu". */
+  summary: string;
+  reason: string | null;
+  files: FeatureUpload[];
+}
+
+export async function createFeatureRequest(body: FeatureCreate): Promise<FeatureDetail> {
+  const r = await request("/widget/me/feature-requests", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  if (r.status === 413) throw new Error("File quá lớn.");
+  if (r.status === 422) throw new Error("Thông tin chưa hợp lệ (kiểm tra các trường bắt buộc và loại file).");
+  if (r.status === 502) throw new Error("Tải file lên thất bại, vui lòng thử lại.");
+  if (!r.ok) throw new Error(`create feature request failed: ${r.status}`);
+  return r.json();
+}
+
+export async function listMyFeatureRequests(): Promise<FeatureSummary[]> {
+  const r = await request("/widget/me/feature-requests");
+  if (!r.ok) throw new Error(`list feature requests failed: ${r.status}`);
+  return r.json();
+}
+
+export async function getMyFeatureRequest(id: string): Promise<FeatureDetail> {
+  const r = await request(`/widget/me/feature-requests/${encodeURIComponent(id)}`);
+  if (!r.ok) throw new Error(`get feature request failed: ${r.status}`);
+  return r.json();
+}
+
+function customerFeaturesPath(customerId: string, id?: string): string {
+  const base = `/admin/customers/${encodeURIComponent(customerId)}/feature-requests`;
+  return id ? `${base}/${encodeURIComponent(id)}` : base;
+}
+
+export async function listCustomerFeatureRequests(customerId: string): Promise<FeatureSummary[]> {
+  const r = await request(customerFeaturesPath(customerId));
+  if (r.status === 404) throw new Error(`Không tìm thấy khách hàng "${customerId}"`);
+  if (!r.ok) throw new Error(`list feature requests failed: ${r.status}`);
+  return r.json();
+}
+
+export async function getCustomerFeatureRequest(
+  customerId: string,
+  id: string,
+): Promise<FeatureDetail> {
+  const r = await request(customerFeaturesPath(customerId, id));
+  if (!r.ok) throw new Error(`get feature request failed: ${r.status}`);
+  return r.json();
+}
+
+export async function updateFeatureRequest(
+  customerId: string,
+  id: string,
+  patch: FeaturePatch,
+): Promise<FeatureDetail> {
+  const r = await request(customerFeaturesPath(customerId, id), {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+  if (!r.ok) throw new Error(`update feature request failed: ${r.status}`);
   return r.json();
 }

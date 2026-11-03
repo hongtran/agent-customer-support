@@ -6,19 +6,24 @@ import Link from "next/link";
 import {
   ConversationDetail,
   ConversationSummary,
+  FeaturePatch,
+  FeatureSummary,
   IssuePatch,
   IssueSummary,
   getCustomerConversation,
+  getCustomerFeatureRequest,
   getCustomerIssue,
   listCustomerConversations,
+  listCustomerFeatureRequests,
   listCustomerIssues,
+  updateFeatureRequest,
   updateIssue,
 } from "@/lib/api";
 import { logout, useSession } from "@/lib/useSession";
 import MessageList, { type Message } from "@/components/MessageList";
 import IssueView from "@/components/IssueView";
 
-type Tab = "conversations" | "issues";
+type Tab = "conversations" | "issues" | "features";
 
 function formatTime(iso: string | null): string {
   if (!iso) return "";
@@ -67,6 +72,21 @@ export default function CustomerConversationsPage() {
   );
   const countOpen = useCallback((items: IssueSummary[]) => {
     setOpenIssues(items.filter((i) => i.status === "pending" || i.status === "processing").length);
+  }, []);
+
+  // Same wiring for feature requests. Open = anything not yet "Đã cập nhật".
+  const [openFeatures, setOpenFeatures] = useState<number | null>(null);
+  const loadFeatures = useCallback(() => listCustomerFeatureRequests(customerId), [customerId]);
+  const loadFeature = useCallback(
+    (id: string) => getCustomerFeatureRequest(customerId, id),
+    [customerId],
+  );
+  const saveFeature = useCallback(
+    (id: string, patch: FeaturePatch) => updateFeatureRequest(customerId, id, patch),
+    [customerId],
+  );
+  const countOpenFeatures = useCallback((items: FeatureSummary[]) => {
+    setOpenFeatures(items.filter((i) => i.status !== "updated").length);
   }, []);
 
   const isAdmin = session.status === "ready" && session.me.role === "admin";
@@ -143,6 +163,9 @@ export default function CustomerConversationsPage() {
           <button onClick={() => setTab("issues")} className={tabCls(tab === "issues")}>
             Sự cố{openIssues ? ` (${openIssues})` : ""}
           </button>
+          <button onClick={() => setTab("features")} className={tabCls(tab === "features")}>
+            Yêu cầu tính năng{openFeatures ? ` (${openFeatures})` : ""}
+          </button>
         </nav>
         <div className="ml-auto flex items-center gap-2">
           <span className="text-xs text-gray-500">{session.me.name}</span>
@@ -155,7 +178,7 @@ export default function CustomerConversationsPage() {
         </div>
       </header>
 
-      {/* Both tabs stay mounted, so the issue count is known before the tab is opened
+      {/* All tabs stay mounted, so the open counts are known before a tab is opened
           and switching tabs keeps each one's selection. */}
       <div className={tab === "issues" ? "flex flex-1 flex-col overflow-hidden" : "hidden"}>
         <IssueView
@@ -164,6 +187,17 @@ export default function CustomerConversationsPage() {
           onUpdate={saveIssue}
           onItemsChange={countOpen}
           emptyText="Khách hàng này chưa báo sự cố nào."
+        />
+      </div>
+
+      <div className={tab === "features" ? "flex flex-1 flex-col overflow-hidden" : "hidden"}>
+        <IssueView
+          kind="feature"
+          loadList={loadFeatures}
+          loadDetail={loadFeature}
+          onUpdate={saveFeature}
+          onItemsChange={countOpenFeatures}
+          emptyText="Khách hàng này chưa gửi yêu cầu tính năng nào."
         />
       </div>
 

@@ -1,13 +1,21 @@
 import base64
 import contextlib
 import logging
+import re
+from urllib.parse import quote
 
 import aioboto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from agent_customer_support.config import get_settings
-from agent_customer_support.models import Attachment, AttachmentRef, StoredAttachment
+from agent_customer_support.models import (
+    Attachment,
+    AttachmentRef,
+    FileRef,
+    RequestFile,
+    StoredAttachment,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -135,3 +143,36 @@ class AttachmentStore:
                 ExpiresIn=get_settings().s3_presign_expiry_seconds,
             )
         return AttachmentRef(kind=stored.kind, media_type=stored.media_type, url=url)
+
+    # ---- feature-request files ----------------------------------------------------
+
+    async def put_request_file(
+        self, request_id: str, index: int, name: str, media_type: str, data: bytes
+    ) -> RequestFile:
+        """Store one file of a feature request under `requests/<request_id>/`. The
+        original name is kept on the record (for the download), not trusted in the key."""
+        key = f"requests/{request_id}/{index}-{_safe_name(name)}"
+        async with get_client() as s3:
+            await s3.put_object(Bucket=self.bucket, Key=key, Body=data, ContentType=media_type)
+        return RequestFile(name=name, media_type=media_type, s3_key=key, size_bytes=len(data))
+
+    async def presign_request_file(self, f: RequestFile) -> FileRef:
+        """Short-lived GET URL that downloads under the original file name."""
+        disposition = f"attachment; filename*=UTF-8''{quote(f.name)}"
+        async with get_client() as s3:
+            url = await s3.generate_presigned_url(
+                "get_object",
+                Params={
+                    "Bucket": self.bucket,
+                    "Key": f.s3_key,
+                    "ResponseContentDisposition": disposition,
+                },
+                ExpiresIn=get_settings().s3_presign_expiry_seconds,
+            )
+        return FileRef(name=f.name, media_type=f.media_type, size_bytes=f.size_bytes, url=url)
+
+
+def _safe_name(name: str) -> str:
+    """A key-safe version of a user's file name: ASCII letters, digits, `.`, `-`, `_`.
+    Vietnamese letters and spaces become `_`; the real name stays on `RequestFile.name`."""
+    return re.sub(r"[^A-Za-z0-9._-]", "_", name)[-100:] or "file"
