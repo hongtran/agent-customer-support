@@ -23,7 +23,7 @@ from datetime import date
 from pathlib import PurePath
 from typing import Final, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field, ValidationError, ValidationInfo, field_validator
 
 from agent_customer_support.channels.deps import (
@@ -34,7 +34,8 @@ from agent_customer_support.channels.deps import (
     get_request_backlog,
     require_admin,
 )
-from agent_customer_support.channels.issues import load_request, patch_changes
+from agent_customer_support import exports
+from agent_customer_support.channels.issues import export_response, load_request, patch_changes
 from agent_customer_support.config import get_settings
 from agent_customer_support.mantis import MantisClient, MantisFile
 from agent_customer_support.models import (
@@ -262,6 +263,28 @@ async def list_customer_feature_requests(
         raise HTTPException(status_code=404, detail="customer not found")
     items = await backlog.list_by_type(customer_id, _TYPE)
     return _summaries(items)
+
+
+# Registered before "/{request_id}", or "export" would be read as a request id.
+@admin_router.get("/export")
+async def export_customer_feature_requests(
+    customer_id: str,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    registry: CustomerRegistry = Depends(get_customer_registry),
+    backlog: RequestBacklog = Depends(get_request_backlog),
+) -> Response:
+    """A customer's feature requests created in a date range, as an Excel file."""
+    return await export_response(
+        customer_id=customer_id,
+        type=_TYPE,
+        date_from=date_from,
+        date_to=date_to,
+        registry=registry,
+        backlog=backlog,
+        build=exports.features_xlsx,
+        file_prefix="tinh-nang",
+    )
 
 
 @admin_router.get("/{request_id}")

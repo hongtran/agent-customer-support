@@ -22,6 +22,7 @@ import {
 import { logout, useSession } from "@/lib/useSession";
 import MessageList, { type Message } from "@/components/MessageList";
 import IssueView from "@/components/IssueView";
+import ExportBar from "@/components/ExportBar";
 
 type Tab = "conversations" | "issues" | "features";
 
@@ -157,7 +158,10 @@ export default function CustomerConversationsPage() {
           Khách hàng <span className="font-mono">{customerId}</span>
         </h1>
         <nav className="ml-4 flex gap-1">
-          <button onClick={() => setTab("conversations")} className={tabCls(tab === "conversations")}>
+          <button
+            onClick={() => setTab("conversations")}
+            className={tabCls(tab === "conversations")}
+          >
             Hội thoại
           </button>
           <button onClick={() => setTab("issues")} className={tabCls(tab === "issues")}>
@@ -181,6 +185,7 @@ export default function CustomerConversationsPage() {
       {/* All tabs stay mounted, so the open counts are known before a tab is opened
           and switching tabs keeps each one's selection. */}
       <div className={tab === "issues" ? "flex flex-1 flex-col overflow-hidden" : "hidden"}>
+        <ExportBar customerId={customerId} kind="bug" />
         <IssueView
           loadList={loadIssues}
           loadDetail={loadIssue}
@@ -191,6 +196,7 @@ export default function CustomerConversationsPage() {
       </div>
 
       <div className={tab === "features" ? "flex flex-1 flex-col overflow-hidden" : "hidden"}>
+        <ExportBar customerId={customerId} kind="feature" />
         <IssueView
           kind="feature"
           loadList={loadFeatures}
@@ -202,7 +208,9 @@ export default function CustomerConversationsPage() {
       </div>
 
       {tab === "conversations" && error && (
-        <div className="border-b border-rose-200 bg-rose-50 px-4 py-2 text-xs text-rose-700">{error}</div>
+        <div className="border-b border-rose-200 bg-rose-50 px-4 py-2 text-xs text-rose-700">
+          {error}
+        </div>
       )}
 
       <div className={tab === "conversations" ? "flex flex-1 overflow-hidden" : "hidden"}>

@@ -338,3 +338,80 @@ async def test_category_is_set_and_cleared():
     assert up.status_history == []  # not a status change
     up = await rb.update_issue(feat.id, me, by="admin", type="new_feature", category=None)
     assert up is not None and up.category is None
+
+
+# ---- export reads: created_at range and get_many ---------------------------------------
+
+
+async def _put_at(rb: RequestBacklog, customer_id: str, at: str, **extra):
+    """A row with a chosen `created_at` (stored the way `add` stores it)."""
+    import uuid
+
+    from agent_customer_support.models import RequestRecord
+    from agent_customer_support.stores.dynamo import get_resource
+
+    rec = RequestRecord(
+        id=str(uuid.uuid4()),
+        customer_id=customer_id,
+        type=extra.pop("type", "bug"),
+        summary="s",
+        created_at=at,
+        **extra,
+    )
+    async with get_resource() as ddb:
+        table = await ddb.Table(rb.table_name)
+        await table.put_item(Item=rec.model_dump(mode="json"))
+    return rec
+
+
+async def test_list_by_type_created_range_is_half_open():
+    import uuid
+    from datetime import UTC, datetime
+
+    rb = RequestBacklog()
+    await rb.init()
+    cid = f"range-{uuid.uuid4()}"
+    before = await _put_at(rb, cid, "2026-11-02T23:59:59.999999Z")
+    first = await _put_at(rb, cid, "2026-11-03T00:00:00.000001Z")
+    exact = await _put_at(rb, cid, "2026-11-03T00:00:00Z")
+    last = await _put_at(rb, cid, "2026-11-04T23:59:59.5Z")
+    after = await _put_at(rb, cid, "2026-11-05T00:00:00.25Z")
+
+    lo = datetime(2026, 11, 3, tzinfo=UTC)
+    hi = datetime(2026, 11, 5, tzinfo=UTC)
+    ids = {i["id"] for i in await rb.list_by_type(cid, "bug", created_from=lo, created_before=hi)}
+    assert ids == {first.id, exact.id, last.id}
+    assert before.id not in ids and after.id not in ids
+
+    only_lo = {i["id"] for i in await rb.list_by_type(cid, "bug", created_from=lo)}
+    assert only_lo == {first.id, exact.id, last.id, after.id}
+    only_hi = {i["id"] for i in await rb.list_by_type(cid, "bug", created_before=lo)}
+    assert only_hi == {before.id}
+
+
+async def test_get_many_keeps_order_and_drops_transcript():
+    import uuid
+
+    rb = RequestBacklog()
+    await rb.init()
+    cid = f"many-{uuid.uuid4()}"
+    a = await rb.add(customer_id=cid, type="bug", summary="a", transcript="user: dài")
+    b = await rb.add(customer_id=cid, type="bug", summary="b", transcript="user: dài")
+    got = await rb.get_many([b.id, "missing-id", a.id])
+    assert [r.id for r in got] == [b.id, a.id]
+    assert all(r.transcript == "" for r in got)
+
+
+async def test_get_many_more_than_one_batch():
+    import uuid
+
+    rb = RequestBacklog()
+    await rb.init()
+    cid = f"many-{uuid.uuid4()}"
+    recs = [
+        await _put_at(rb, cid, f"2026-10-01T00:00:{i % 60:02d}Z", note=f"n{i}") for i in range(105)
+    ]
+    ids = [r.id for r in recs]
+    got = await rb.get_many(ids)
+    assert [r.id for r in got] == ids
+    assert got[104].note == "n104"

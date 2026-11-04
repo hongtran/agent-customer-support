@@ -6,13 +6,16 @@ by-customer index; there is deliberately no all-customers list, which would have
 every tenant's rows (transcripts included) on each load.
 """
 
-from datetime import date
+from collections.abc import Callable
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
+from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 
-from agent_customer_support import image_urls
+from agent_customer_support import exports, image_urls
 from agent_customer_support.channels.deps import (
     get_current_customer,
     get_customer_registry,
@@ -20,6 +23,7 @@ from agent_customer_support.channels.deps import (
     get_request_backlog,
     require_admin,
 )
+from agent_customer_support.config import get_settings
 from agent_customer_support.models import (
     CustomerProfile,
     IssueDetail,
@@ -74,6 +78,57 @@ def patch_changes(body: BaseModel) -> dict[str, Any]:
     return changes
 
 
+XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+async def export_response(
+    *,
+    customer_id: str,
+    type: RequestType,
+    date_from: date | None,
+    date_to: date | None,
+    registry: CustomerRegistry,
+    backlog: RequestBacklog,
+    build: Callable[..., bytes],
+    file_prefix: str,
+) -> Response:
+    """One customer's rows of one type, created between two days (both inclusive, as
+    days in `usage_timezone`), as an .xlsx download. Shared with
+    `channels/feature_requests.py`.
+
+    The index gives the ids in the range; `get_many` then reads the full rows, because
+    the index does not project note, due date, requester… Still one customer only, so
+    no table scan.
+    """
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(status_code=422, detail="date_from is after date_to")
+    customer = await registry.get(customer_id)
+    if customer is None:
+        raise HTTPException(status_code=404, detail="customer not found")
+
+    tz = ZoneInfo(get_settings().usage_timezone)
+    lo = datetime.combine(date_from, time(), tz) if date_from else None
+    hi = datetime.combine(date_to + timedelta(days=1), time(), tz) if date_to else None
+    items = await backlog.list_by_type(customer_id, type, created_from=lo, created_before=hi)
+    records = await backlog.get_many([i["id"] for i in items])
+
+    data = build(
+        records,
+        customer_name=customer.name or customer_id,
+        date_from=date_from,
+        date_to=date_to,
+        tz=tz,
+        now=datetime.now(UTC),
+    )
+    parts = [file_prefix, customer_id, *(d.isoformat() for d in (date_from, date_to) if d)]
+    filename = "_".join(parts) + ".xlsx"
+    return Response(
+        content=data,
+        media_type=XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
+
+
 async def _load_bug(backlog: RequestBacklog, issue_id: str, customer_id: str) -> RequestRecord:
     return await load_request(backlog, issue_id, customer_id, "bug")
 
@@ -121,6 +176,28 @@ async def list_customer_issues(
     if await registry.get(customer_id) is None:
         raise HTTPException(status_code=404, detail="customer not found")
     return await backlog.list_bugs(customer_id)
+
+
+# Registered before "/{issue_id}", or "export" would be read as an issue id.
+@admin_router.get("/export")
+async def export_customer_issues(
+    customer_id: str,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    registry: CustomerRegistry = Depends(get_customer_registry),
+    backlog: RequestBacklog = Depends(get_request_backlog),
+) -> Response:
+    """A customer's bugs created in a date range, as an Excel file."""
+    return await export_response(
+        customer_id=customer_id,
+        type="bug",
+        date_from=date_from,
+        date_to=date_to,
+        registry=registry,
+        backlog=backlog,
+        build=exports.issues_xlsx,
+        file_prefix="su-co",
+    )
 
 
 @admin_router.get("/{issue_id}")

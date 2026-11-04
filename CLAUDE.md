@@ -368,6 +368,22 @@ the type, so a bug id on the feature route (or the reverse) is a 404. The admin 
 reuses `IssueView` with `kind="feature"`, which hides the transcript and shows the requester,
 reason, files, the category select and the "Giải pháp" box.
 
+**Excel export** (admin only, **one customer per file** — same no-scan rule):
+`GET /admin/customers/{id}/issues/export` and `…/feature-requests/export`, with optional
+`date_from` / `date_to` (`YYYY-MM-DD`, both inclusive, read as days in `USAGE_TIMEZONE`). The
+range is on **`created_at`, the GSI sort key**, so DynamoDB reads only those rows
+(`list_by_type(created_from=, created_before=)`); the bounds are written to the second with no
+fraction and no `Z` (`_key_bound`), a prefix of every stored value in that second, which makes
+the range exact whatever suffix a row carries. The index projects list fields only, so
+`RequestBacklog.get_many` then reads the full rows (`BatchGetItem`, 100 keys per call,
+`UnprocessedKeys` retried) **without the transcript**. `exports.py` builds the sheet (pure, no
+I/O); every text cell is forced to a string, because openpyxl stores any `=…` string as a
+formula and the text is customer-written. Its status/category labels copy
+`IssueStatusBadge.tsx` — keep them in sync. The export routes are registered **before**
+`/{id}`, or `export` is read as an id. The UI (`ExportBar`) downloads through `request()` for
+the bearer token, and reads the file name from `Content-Disposition`, which is why CORS
+exposes that header.
+
 ### Contact follow-up
 
 The customer account is shared by a whole company, so after a handoff CS still needs to
