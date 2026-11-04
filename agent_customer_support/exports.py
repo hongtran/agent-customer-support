@@ -46,14 +46,19 @@ CATEGORY_LABEL: dict[str, str] = {
 _DATE_FMT = "dd/mm/yyyy"
 _DATETIME_FMT = "dd/mm/yyyy hh:mm"
 _HEADER_ROW = 3
+# Excel's limit on one cell's text. A longer history is cut, keeping the newest lines.
+_MAX_CELL_CHARS = 32767
 
 
 @dataclass(frozen=True)
 class _Col:
     header: str
     width: int
-    value: Callable[[RequestRecord], Any]
+    # (record) -> value, or (record, tz) -> value when `with_tz`.
+    value: Callable[..., Any]
     wrap: bool = False
+    # `value` takes the display timezone as a second argument (for times inside text).
+    with_tz: bool = False
 
 
 def _contact(r: RequestRecord) -> str | None:
@@ -61,6 +66,24 @@ def _contact(r: RequestRecord) -> str | None:
     if c is None:
         return None
     return " · ".join(v for v in (c.phone, c.email) if v) or c.raw or None
+
+
+def _history(r: RequestRecord, tz: ZoneInfo) -> str | None:
+    """Every status change in one cell, oldest first, one line each:
+    `03/11/2026 14:05 · Đang xử lý · admin — <note>`."""
+    lines = []
+    for h in r.status_history:
+        line = (
+            f"{h.at.astimezone(tz).strftime('%d/%m/%Y %H:%M')} · "
+            f"{STATUS_LABEL.get(h.status, h.status)} · {h.by}"
+        )
+        if h.note:
+            line += f" — {h.note}"
+        lines.append(line)
+    text = "\n".join(lines)
+    if len(text) > _MAX_CELL_CHARS:
+        text = "…" + text[-(_MAX_CELL_CHARS - 1) :]
+    return text or None
 
 
 def _requester(field: str) -> Callable[[RequestRecord], str | None]:
@@ -76,6 +99,7 @@ _ISSUE_COLS = [
     _Col("Ghi chú", 40, lambda r: r.note, wrap=True),
     _Col("Ngày dự kiến", 14, lambda r: r.due_date),
     _Col("Ngày hoàn thành", 17, lambda r: r.resolved_at),
+    _Col("Lịch sử trạng thái", 60, _history, wrap=True, with_tz=True),
     _Col("Mantis #", 10, lambda r: r.mantis_issue_id),
     _Col("Link Mantis", 40, lambda r: r.mantis_issue_url),
     _Col("Liên hệ", 30, _contact, wrap=True),
@@ -96,6 +120,7 @@ _FEATURE_COLS = [
     _Col("Giải pháp", 40, lambda r: r.note, wrap=True),
     _Col("Ngày dự kiến hoàn thành", 14, lambda r: r.due_date),
     _Col("Ngày hoàn thành", 17, lambda r: r.resolved_at),
+    _Col("Lịch sử trạng thái", 60, _history, wrap=True, with_tz=True),
     _Col("Mantis #", 10, lambda r: r.mantis_issue_id),
     _Col("Link Mantis", 40, lambda r: r.mantis_issue_url),
 ]
@@ -171,7 +196,8 @@ def _build(
         ws.cell(row=row, column=1, value=n).alignment = top
         for i, col in enumerate(cols, start=2):
             cell = ws.cell(row=row, column=i)
-            _set(cell, col.value(rec), tz)
+            value = col.value(rec, tz) if col.with_tz else col.value(rec)
+            _set(cell, value, tz)
             cell.alignment = top_wrap if col.wrap else top
 
     ws.freeze_panes = ws.cell(row=_HEADER_ROW + 1, column=1)

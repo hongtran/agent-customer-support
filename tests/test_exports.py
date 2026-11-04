@@ -95,3 +95,43 @@ def test_customer_text_is_never_a_formula():
     assert {c.value for c in cells} == {"=1+1", '=HYPERLINK("x")'}
     assert all(c.data_type == "s" for c in cells)
     assert ws["A1"].data_type == "s"
+
+
+def test_status_history_is_one_cell_oldest_first_in_local_time():
+    from agent_customer_support.models import StatusChange
+
+    rec = RequestRecord(
+        id="f1",
+        customer_id="c1",
+        type="new_feature",
+        summary="s",
+        status_history=[
+            StatusChange(
+                status="processing", at=datetime(2026, 11, 3, 7, 5, tzinfo=UTC), by="admin"
+            ),
+            StatusChange(
+                status="responded",
+                at=datetime(2026, 11, 3, 17, 0, tzinfo=UTC),
+                by="cs1",
+                note="Đã gửi giải pháp",
+            ),
+        ],
+    )
+    for build in (exports.issues_xlsx, exports.features_xlsx):
+        ws = _sheet(build([rec], customer_name="A", date_from=None, date_to=None, tz=TZ, now=NOW))
+        header = [c.value for c in ws[3]]
+        cell = ws[4][header.index("Lịch sử trạng thái")]
+        assert cell.value == (
+            "03/11/2026 14:05 · Đang xử lý · admin\n"
+            "04/11/2026 00:00 · Đã phản hồi · cs1 — Đã gửi giải pháp"
+        )
+        assert cell.alignment.wrap_text
+
+
+def test_empty_status_history_is_an_empty_cell():
+    rec = RequestRecord(id="b1", customer_id="c1", type="bug", summary="s")
+    ws = _sheet(
+        exports.issues_xlsx([rec], customer_name="A", date_from=None, date_to=None, tz=TZ, now=NOW)
+    )
+    header = [c.value for c in ws[3]]
+    assert ws[4][header.index("Lịch sử trạng thái")].value is None
