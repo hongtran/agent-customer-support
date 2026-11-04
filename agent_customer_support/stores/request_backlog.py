@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import UTC, date, datetime
 from typing import Any
@@ -19,6 +20,8 @@ from agent_customer_support.models import (
     StatusChange,
 )
 from agent_customer_support.stores.dynamo import get_resource
+
+logger = logging.getLogger(__name__)
 
 # Lists one customer's rows, newest first. Every issue list (the customer's own page and
 # the admin's per-customer tab) is a query on this index; nothing scans the table, which
@@ -51,6 +54,22 @@ _INDEX = {
         ],
     },
 }
+
+
+# The most keys one BatchGetItem call accepts.
+_BATCH_GET_MAX = 100
+
+
+def _key_bound(t: datetime) -> str:
+    """A `created_at` range bound, compared as a string against the stored ISO value.
+
+    Stored values look like `2026-11-03T17:00:00.123456Z`. The bound is written to the
+    second, with no fraction and no `Z`: a string sorts before every longer string it
+    is a prefix of, so a bound is lower than every value stored within that second. That
+    makes `>= bound` include the whole second and `< bound` exclude it, whatever
+    fraction or offset suffix a stored value carries.
+    """
+    return t.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S")
 
 
 class _Unset:
@@ -159,16 +178,38 @@ class RequestBacklog:
         """One customer's verified bugs, newest first."""
         return [IssueSummary.model_validate(i) for i in await self.list_by_type(customer_id, "bug")]
 
-    async def list_by_type(self, customer_id: str, type: RequestType) -> list[dict[str, Any]]:
+    async def list_by_type(
+        self,
+        customer_id: str,
+        type: RequestType,
+        *,
+        created_from: datetime | None = None,
+        created_before: datetime | None = None,
+    ) -> list[dict[str, Any]]:
         """One customer's rows of one type, newest first, as the raw GSI items (only the
         projected fields). Each caller validates them into its own summary model.
+
+        `created_from` (inclusive) and `created_before` (exclusive) limit `created_at`.
+        That is a condition on the index sort key, so DynamoDB reads only the rows in
+        the range instead of filtering them after the read.
 
         Follows `LastEvaluatedKey`: a query page stops at 1 MB, and the `type` filter is
         applied after that limit, so one page can come back short or even empty.
         """
+        key = Key("customer_id").eq(customer_id)
+        lo = _key_bound(created_from) if created_from else None
+        hi = _key_bound(created_before) if created_before else None
+        if lo and hi:
+            # BETWEEN is inclusive, but no stored value equals `hi` (see `_key_bound`),
+            # so this is lo <= created_at < hi.
+            key = key & Key("created_at").between(lo, hi)
+        elif lo:
+            key = key & Key("created_at").gte(lo)
+        elif hi:
+            key = key & Key("created_at").lt(hi)
         kwargs: dict[str, Any] = {
             "IndexName": BY_CUSTOMER_INDEX,
-            "KeyConditionExpression": Key("customer_id").eq(customer_id),
+            "KeyConditionExpression": key,
             "FilterExpression": Attr("type").eq(type),
             "ScanIndexForward": False,
         }
@@ -183,6 +224,45 @@ class RequestBacklog:
                     break
                 kwargs["ExclusiveStartKey"] = last
         return items
+
+    async def get_many(self, ids: list[str]) -> list[RequestRecord]:
+        """Full rows for these ids, in the same order, without the transcript (the bulk
+        of a bug row, and nothing an export shows). For the fields the index does not
+        project — note, due date, requester, category… — without one `get_item` each.
+
+        `BatchGetItem` takes at most 100 keys per call and may hand some back as
+        `UnprocessedKeys` under load; those are asked again. A missing id is left out.
+        A row that does not validate is skipped and logged, like the list endpoints do.
+        """
+        fields = [f for f in RequestRecord.model_fields if f != "transcript"]
+        names = {f"#f{i}": f for i, f in enumerate(fields)}
+        projection = ", ".join(names)
+        found: dict[str, dict[str, Any]] = {}
+        async with get_resource() as ddb:
+            for start in range(0, len(ids), _BATCH_GET_MAX):
+                chunk = list(dict.fromkeys(ids[start : start + _BATCH_GET_MAX]))
+                request: dict[str, Any] = {
+                    self.table_name: {
+                        "Keys": [{"id": i} for i in chunk],
+                        "ProjectionExpression": projection,
+                        "ExpressionAttributeNames": names,
+                    }
+                }
+                while request:
+                    res = await ddb.batch_get_item(RequestItems=request)
+                    for item in res.get("Responses", {}).get(self.table_name, []):
+                        found[item["id"]] = item
+                    request = res.get("UnprocessedKeys") or {}
+        records: list[RequestRecord] = []
+        for i in ids:
+            item = found.get(i)
+            if item is None:
+                continue
+            try:
+                records.append(RequestRecord.model_validate(item))
+            except ValueError as exc:
+                logger.warning("skipping invalid request row %s: %s", i, exc)
+        return records
 
     async def update_issue(
         self,

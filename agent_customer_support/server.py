@@ -76,6 +76,8 @@ app.add_middleware(
     allow_origins=get_settings().cors_origins,
     allow_methods=["POST", "GET", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["Content-Type", "Authorization"],
+    # Lets the admin UI read the file name of an export download.
+    expose_headers=["Content-Disposition"],
 )
 
 app.include_router(auth_router)

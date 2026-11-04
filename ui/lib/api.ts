@@ -474,11 +474,7 @@ export async function updateIssue(
  * "received". Only "updated" (delivered) closes it.
  */
 export type FeatureStatus =
-  | "received"
-  | "processing"
-  | "responded"
-  | "updated"
-  | "awaiting_agreement";
+  "received" | "processing" | "responded" | "updated" | "awaiting_agreement";
 
 export const FEATURE_STATUSES: FeatureStatus[] = [
   "received",
@@ -590,7 +586,8 @@ export async function createFeatureRequest(body: FeatureCreate): Promise<Feature
     body: JSON.stringify(body),
   });
   if (r.status === 413) throw new Error("File quá lớn.");
-  if (r.status === 422) throw new Error("Thông tin chưa hợp lệ (kiểm tra các trường bắt buộc và loại file).");
+  if (r.status === 422)
+    throw new Error("Thông tin chưa hợp lệ (kiểm tra các trường bắt buộc và loại file).");
   if (r.status === 502) throw new Error("Tải file lên thất bại, vui lòng thử lại.");
   if (!r.ok) throw new Error(`create feature request failed: ${r.status}`);
   return r.json();
@@ -640,4 +637,52 @@ export async function updateFeatureRequest(
   });
   if (!r.ok) throw new Error(`update feature request failed: ${r.status}`);
   return r.json();
+}
+
+/* ------------------------------------------------------------------ exports */
+
+export type ExportKind = "bug" | "feature";
+
+/** The file name from `Content-Disposition` (`filename*=UTF-8''…`), or null. */
+function filenameFrom(header: string | null): string | null {
+  const m = header?.match(/filename\*=UTF-8''([^;]+)/i);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+/**
+ * Download one customer's bugs or feature requests created between two days (both
+ * inclusive, `YYYY-MM-DD`, empty = open) as an Excel file. Goes through `request()`
+ * because the route needs the bearer token, which a plain `<a href>` cannot send; the
+ * file is then saved through a temporary object URL.
+ */
+export async function downloadExport(
+  customerId: string,
+  kind: ExportKind,
+  dateFrom: string,
+  dateTo: string,
+): Promise<void> {
+  const base = kind === "bug" ? customerIssuesPath(customerId) : customerFeaturesPath(customerId);
+  const params = new URLSearchParams();
+  if (dateFrom) params.set("date_from", dateFrom);
+  if (dateTo) params.set("date_to", dateTo);
+  const qs = params.toString();
+  const r = await request(`${base}/export${qs ? `?${qs}` : ""}`);
+  if (r.status === 422) throw new Error("Khoảng ngày không hợp lệ (từ ngày phải trước đến ngày).");
+  if (r.status === 404) throw new Error(`Không tìm thấy khách hàng "${customerId}"`);
+  if (!r.ok) throw new Error(`Xuất file thất bại: ${r.status}`);
+  const name =
+    filenameFrom(r.headers.get("Content-Disposition")) ??
+    `${kind === "bug" ? "su-co" : "tinh-nang"}_${customerId}.xlsx`;
+  const url = URL.createObjectURL(await r.blob());
+  try {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    // Revoke after the click has been handled, or some browsers cancel the download.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
 }
