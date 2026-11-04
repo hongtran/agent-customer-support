@@ -377,7 +377,9 @@ fraction and no `Z` (`_key_bound`), a prefix of every stored value in that secon
 the range exact whatever suffix a row carries. The index projects list fields only, so
 `RequestBacklog.get_many` then reads the full rows (`BatchGetItem`, 100 keys per call,
 `UnprocessedKeys` retried) **without the transcript**. `exports.py` builds the sheet (pure, no
-I/O); every text cell is forced to a string, because openpyxl stores any `=…` string as a
+I/O); `status_history` is one "Lịch sử trạng thái" cell, one line per change (time in
+`USAGE_TIMEZONE` · status · admin — note), oldest first, cut from the oldest end at Excel's
+32,767-character cell limit. Every text cell is forced to a string, because openpyxl stores any `=…` string as a
 formula and the text is customer-written. Its status/category labels copy
 `IssueStatusBadge.tsx` — keep them in sync. The export routes are registered **before**
 `/{id}`, or `export` is read as an id. The UI (`ExportBar`) downloads through `request()` for
